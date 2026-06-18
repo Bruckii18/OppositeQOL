@@ -60,6 +60,15 @@ function MB:Create()
     border:SetSize(53, 53)
     border:SetPoint("TOPLEFT")
 
+    -- Combat-log status dot, lower-right of the ring. The Combat Log Status
+    -- module repaints it via RefreshStatus; it stays hidden while that module
+    -- is disabled. Sublevel 7 keeps it above the border in the OVERLAY layer.
+    local dot = button:CreateTexture(nil, "OVERLAY", nil, 7)
+    dot:SetSize(12, 12)
+    dot:SetPoint("CENTER", button, "CENTER", 9, -9)
+    dot:Hide()
+    button.statusDot = dot
+
     button:SetScript("OnDragStart", function(self) self:SetScript("OnUpdate", OnDrag) end)
     button:SetScript("OnDragStop",  function(self) self:SetScript("OnUpdate", nil) end)
 
@@ -77,12 +86,35 @@ function MB:Create()
         GameTooltip:AddLine("|cffffffffLeft-click|r  open the module list")
         GameTooltip:AddLine("|cffffffffRight-click|r  open Who Pulled")
         GameTooltip:AddLine("|cff999999Drag|r  move around the minimap")
+        if ns.CombatLog and ns:IsModuleEnabled("combatLog") then
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine("Combat Logging: " .. ns.CombatLog:StatusText())
+        end
         GameTooltip:Show()
     end)
     button:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     UpdatePosition()
     button:SetShown(not ns.db.minimap.hide)
+    self:RefreshStatus()
+end
+
+-- Repaint the combat-log status dot to match the Combat Log Status module:
+-- green = logging, red = not (matching the tooltip text). Hidden when that
+-- module is absent or disabled.
+function MB:RefreshStatus()
+    if not button or not button.statusDot then return end
+    local dot = button.statusDot
+    if ns.CombatLog and ns:IsModuleEnabled("combatLog") then
+        if ns.CombatLog:IsActive() then
+            dot:SetTexture("Interface\\COMMON\\Indicator-Green")
+        else
+            dot:SetTexture("Interface\\COMMON\\Indicator-Red")
+        end
+        dot:Show()
+    else
+        dot:Hide()
+    end
 end
 
 function MB:SetShown(show)

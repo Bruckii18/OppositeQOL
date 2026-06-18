@@ -5,44 +5,24 @@ feature is a self-contained module you can enable or disable independently.
 
 ## Features
 
-**Invite Helper** — Paste your list of expected players and compare it against
-your current raid or party. The addon highlights who is *missing* (expected but
-not in the group) and who is *not on the list* (in the group but not expected),
-then lets you invite the missing players and remove the extras — all at once or
-one name at a time. Matching is case-insensitive, supports cross-realm names,
-and assumes your own realm when none is given.
+**Invite Helper** — Compares your expected roster against your current raid or
+party: it highlights who's *missing* and who's *not on the list*, then lets you
+invite or remove them in one click. **Needs input:** paste your list of expected
+players.
 
 **Who Pulled** — Calls out *who* pulled the boss and *how early or late* it was
-versus the DBM/BigWigs pull timer (or Blizzard's countdown). Shows a local
-center-screen banner on engage (`Boss pulled 0.42 seconds early by <Name>.`),
-plays an optional alarm, and exempts tanks — they're supposed to pull. Raid
-encounters only. Every pull is recorded into a per-night, per-instance session;
-open the report (`/oqol pull`) for a per-puller leaderboard you can post to raid
-or party chat.
+versus the DBM/BigWigs pull timer, and keeps a per-night leaderboard you can post
+to chat (`/oqol pull`). Raid encounters only; tanks are exempt. **Optional
+input:** in the report window you can turn on an alarm sound and/or a chat
+call-out for prepulls (both off by default).
 
-The puller is resolved from the boss's target (= who holds aggro) first, then
-the `C_DamageMeter` session as a fallback.
-
-Settings (in the `/oqol pull` window), both **off by default — opt in**: an
-**alarm sound** toggle with a **sound dropdown** (the game's built-in alert
-sounds, plus everything registered with LibSharedMedia if you run DBM /
-WeakAuras / Details / ElvUI — no dependency, it just uses the shared pool when
-present) and a **Play** preview button, and an **announce-puller-in-chat**
-toggle with an `AUTO`/`SAY`/`YELL` channel selector.
-The chat call-out fires for **prepulls only** (early pulls) and reads:
-
-```
-OppositeQOL: Prepulled the boss by 0.50sec. Who prepulled? Playername.
-```
-
-Because Midnight blocks addon chat during combat lockdown, the call-out is
-*deferred* — it's queued at the pull and posted the moment the group leaves
-combat (seconds later on a wipe). The live banner is always local-only and still
-covers on-time/late pulls; only the chat shame is early-pull-specific.
+**Combat Log Status** — Shows whether combat logging is currently on, so you know
+your pull is being recorded: a green (on) / red (off) dot on the minimap button,
+plus a tooltip line and the `/oqol log` command. It only reports the state — it
+never starts or stops logging.
 
 **Module suite** — Every feature is a module with its own on/off setting, saved
-per account. Disabling one hides its UI and stops it immediately, no reload
-needed.
+per account. Toggle them in `/oqol`; disabling one stops it immediately.
 
 ## Commands
 
@@ -51,15 +31,16 @@ needed.
 - `/oqol enable <module>` / `/oqol disable <module>`
 - `/invitehelper` (or `/oqol invite`) — open Invite Helper
 - `/oqol pull` (or `/oqol wp`) — open the Who Pulled report
+- `/oqol log` (or `/oqol cl`) — report whether combat logging is active
 - `/oqol minimap` — show/hide the minimap button
 
 ## Minimap button
 
 A minimap button (its own bundled logo) gives one-click access: **left-click**
-opens the module list, **right-click** opens the Who Pulled report, and you can
-**drag** it around the minimap edge. Its position and visibility are saved; hide
-it with `/oqol minimap`. It's built in without LibDBIcon/LibDataBroker, so the
-addon stays dependency-free.
+opens the module list, **right-click** opens the Who Pulled report, and **drag**
+moves it around the minimap edge. A status dot in its corner shows whether combat
+logging is active (green) or not (red). Its position and visibility are saved;
+hide it with `/oqol minimap`.
 
 ## Installation
 
@@ -86,4 +67,5 @@ Standalone logic tests (no game required):
 ```sh
 luajit tests/test_invitehelper.lua
 luajit tests/test_whopulled.lua
+luajit tests/test_combatlog.lua
 ```

@@ -116,6 +116,7 @@ local function PrintHelp()
     ns:Print("  /oqol                  open the module list")
     ns:Print("  /oqol invite           open the Invite Helper")
     ns:Print("  /oqol pull             open the Who Pulled report")
+    ns:Print("  /oqol log              show if combat logging is active")
     ns:Print("  /oqol list             show modules and their state")
     ns:Print("  /oqol enable <module>  enable a module")
     ns:Print("  /oqol disable <module> disable a module")
@@ -138,6 +139,16 @@ SlashCmdList["OPPOSITEQOL"] = function(msg)
 
     elseif cmd == "pull" or cmd == "wp" or cmd == "whopulled" then
         if ns.WhoPulled then ns.WhoPulled:Toggle() end
+
+    elseif cmd == "log" or cmd == "combatlog" or cmd == "cl" then
+        if not ns.CombatLog then
+            ns:Print("combat log status is unavailable.")
+        elseif not ns:IsModuleEnabled("combatLog") then
+            ns:Print("Combat Log Status is disabled - enable it with /oqol.")
+        else
+            ns.CombatLog:Check()  -- read live, also repaints the minimap dot
+            ns:Print("combat logging is " .. ns.CombatLog:StatusText() .. ".")
+        end
 
     elseif cmd == "minimap" then
         ns.db.minimap = ns.db.minimap or {}
