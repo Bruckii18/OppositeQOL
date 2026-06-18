@@ -21,10 +21,7 @@ open the report (`/oqol pull`) for a per-puller leaderboard you can post to raid
 or party chat.
 
 The puller is resolved from the boss's target (= who holds aggro) first, then
-the `C_DamageMeter` session as a fallback. *Combat-log "first hit" detection is
-deliberately omitted:* Midnight (12.0) errors on `COMBAT_LOG_EVENT_UNFILTERED`
-and wraps combat data in "secret values" during raid/M+ encounters, so the
-first attacker can't be read at pull time.
+the `C_DamageMeter` session as a fallback.
 
 Settings (in the `/oqol pull` window), both **off by default — opt in**: an
 **alarm sound** toggle with a **sound dropdown** (the game's built-in alert
