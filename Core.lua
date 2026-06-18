@@ -115,9 +115,11 @@ local function PrintHelp()
     ns:Print("commands:")
     ns:Print("  /oqol                  open the module list")
     ns:Print("  /oqol invite           open the Invite Helper")
+    ns:Print("  /oqol pull             open the Who Pulled report")
     ns:Print("  /oqol list             show modules and their state")
     ns:Print("  /oqol enable <module>  enable a module")
     ns:Print("  /oqol disable <module> disable a module")
+    ns:Print("  /oqol minimap          show/hide the minimap button")
 end
 
 SLASH_OPPOSITEQOL1 = "/oqol"
@@ -133,6 +135,15 @@ SlashCmdList["OPPOSITEQOL"] = function(msg)
 
     elseif cmd == "invite" or cmd == "inv" then
         if ns.InviteHelper then ns.InviteHelper:Toggle() end
+
+    elseif cmd == "pull" or cmd == "wp" or cmd == "whopulled" then
+        if ns.WhoPulled then ns.WhoPulled:Toggle() end
+
+    elseif cmd == "minimap" then
+        ns.db.minimap = ns.db.minimap or {}
+        local show = ns.db.minimap.hide and true or false  -- show if currently hidden
+        if ns.MinimapButton then ns.MinimapButton:SetShown(show) end
+        ns:Print("minimap button " .. (show and "shown" or "hidden") .. ".")
 
     elseif cmd == "list" then
         ns:Print("modules:")

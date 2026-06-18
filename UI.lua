@@ -7,6 +7,10 @@ local addonName, ns = ...
 local UI = {}
 ns.UI = UI
 
+-- Bundled logo (Media\...tga). Texture paths drop the extension; WoW resolves
+-- .tga/.blp. Shared by the window headers, the minimap button and the .toc icon.
+UI.LOGO = "Interface\\AddOns\\OppositeQOL\\Media\\Opposite_HB_Discord_128x128"
+
 UI.theme = {
     bg         = { 0.05, 0.05, 0.06, 0.96 }, -- main panel
     bgInput    = { 0.09, 0.09, 0.10, 1 },    -- input box / list cells
@@ -111,6 +115,109 @@ function UI.CreateToggle(parent)
     return b
 end
 
+-- Themed dropdown. A flat button showing the current selection; clicking opens
+-- a scrollable popup of options that closes on pick or on a click anywhere else.
+--   dd:SetOptions({ "A", "B" } or { {value=1,text="A"}, ... })
+--   dd:SetValue(v) / dd:GetValue()
+--   dd.OnSelect = function(value) end   -- fired on user pick (not on SetValue)
+function UI.CreateDropdown(parent, width, height)
+    local ROWH, MAXROWS = 18, 10
+    local dd = UI.CreateFlatButton(parent, "", width, height or 20, theme.text)
+    dd._fs:ClearAllPoints()
+    dd._fs:SetPoint("LEFT", 8, 0)
+    dd._fs:SetJustifyH("LEFT")
+
+    local arrow = dd:CreateFontString(nil, "OVERLAY")
+    StyleFont(arrow, 9, theme.textDim)
+    arrow:SetPoint("RIGHT", -6, 0)
+    arrow:SetText("v")
+    dd._fs:SetPoint("RIGHT", arrow, "LEFT", -4, 0)
+
+    -- Full-screen catcher so a click outside the popup closes it.
+    local catcher = CreateFrame("Button", nil, UIParent)
+    catcher:SetAllPoints(UIParent)
+    catcher:SetFrameStrata("FULLSCREEN_DIALOG")
+    catcher:Hide()
+
+    local pop = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+    pop:SetFrameStrata("TOOLTIP")
+    pop:SetWidth(width)
+    pop:SetPoint("TOPLEFT", dd, "BOTTOMLEFT", 0, -2)
+    UI.ApplyBackdrop(pop, theme.bgInput, theme.borderHi)
+    pop:Hide()
+    catcher:SetScript("OnClick", function() pop:Hide() end)
+    pop:SetScript("OnShow", function() catcher:Show(); pop:Raise() end)
+    pop:SetScript("OnHide", function() catcher:Hide() end)
+    if parent.HookScript then parent:HookScript("OnHide", function() pop:Hide() end) end
+
+    local scroll = CreateFrame("ScrollFrame", nil, pop)
+    scroll:SetPoint("TOPLEFT", 3, -3)
+    scroll:SetPoint("BOTTOMRIGHT", -3, 3)
+    scroll:EnableMouseWheel(true)
+    local child = CreateFrame("Frame", nil, scroll)
+    scroll:SetScrollChild(child)
+    scroll:SetScript("OnMouseWheel", function(self, delta)
+        local maxS = math.max(0, child:GetHeight() - self:GetHeight())
+        self:SetVerticalScroll(math.min(maxS, math.max(0, self:GetVerticalScroll() - delta * ROWH * 2)))
+    end)
+
+    dd._rows, dd._opts = {}, {}
+
+    local function optValue(o) return type(o) == "table" and o.value or o end
+    local function optText(o)  return type(o) == "table" and (o.text or o.value) or o end
+
+    local function pick(value, text, fire)
+        dd._value = value
+        dd._fs:SetText(text or tostring(value))
+        pop:Hide()
+        if fire and dd.OnSelect then dd.OnSelect(value) end
+    end
+
+    function dd:SetOptions(opts)
+        self._opts = opts or {}
+        for i, o in ipairs(self._opts) do
+            local row = self._rows[i]
+            if not row then
+                row = CreateFrame("Button", nil, child)
+                row:SetHeight(ROWH)
+                local hl = row:CreateTexture(nil, "BACKGROUND")
+                hl:SetAllPoints(); hl:SetColorTexture(unpack(theme.rowHover)); hl:Hide()
+                row:SetScript("OnEnter", function() hl:Show() end)
+                row:SetScript("OnLeave", function() hl:Hide() end)
+                local fs = row:CreateFontString(nil, "OVERLAY")
+                StyleFont(fs, 12, theme.text)
+                fs:SetPoint("LEFT", 6, 0); fs:SetPoint("RIGHT", -6, 0); fs:SetJustifyH("LEFT")
+                row._fs = fs
+                self._rows[i] = row
+            end
+            row._val, row._txt = optValue(o), optText(o)
+            row._fs:SetText(row._txt)
+            row:SetScript("OnClick", function() pick(row._val, row._txt, true) end)
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", 0, -(i - 1) * ROWH)
+            row:SetPoint("TOPRIGHT", 0, -(i - 1) * ROWH)
+            row:Show()
+        end
+        for i = #self._opts + 1, #self._rows do self._rows[i]:Hide() end
+        pop:SetHeight(math.min(#self._opts, MAXROWS) * ROWH + 6)
+        child:SetSize(width - 6, #self._opts * ROWH)
+    end
+
+    function dd:SetValue(value)
+        for _, o in ipairs(self._opts) do
+            if optValue(o) == value then pick(optValue(o), optText(o), false); return end
+        end
+        dd._value = value
+        dd._fs:SetText(tostring(value))
+    end
+    function dd:GetValue() return dd._value end
+
+    dd:SetScript("OnClick", function()
+        if pop:IsShown() then pop:Hide() else pop:Show() end
+    end)
+    return dd
+end
+
 -- Build a themed, draggable, closable window with a title + accent subtitle +
 -- divider. opts: { name, width, height, title, subtitle, posKey }
 -- posKey persists position under ns.db[posKey].pos.
@@ -144,9 +251,15 @@ function UI.CreatePanel(opts)
 
     if opts.name then tinsert(UISpecialFrames, opts.name) end  -- close with Escape
 
+    local logo = f:CreateTexture(nil, "OVERLAY")
+    logo:SetSize(20, 20)
+    logo:SetPoint("TOPLEFT", 12, -10)
+    logo:SetTexture(UI.LOGO)
+    f.logo = logo
+
     local title = f:CreateFontString(nil, "OVERLAY")
     StyleFont(title, 15, theme.text)
-    title:SetPoint("TOPLEFT", 14, -13)
+    title:SetPoint("LEFT", logo, "RIGHT", 6, 0)
     title:SetText(opts.title or "OppositeQOL")
     f.titleFS = title
 
