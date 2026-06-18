@@ -1,0 +1,13 @@
+## Interface: 110207
+## Title: OppositeQOL
+## Notes: Quality-of-life tools for raid leaders.|nModule 1: Invite Helper.
+## Author: Michael
+## Version: 0.1.0
+## SavedVariables: OppositeQOLDB
+## IconTexture: Interface\ICONS\INV_Misc_GroupLooking
+
+# Load order matters: Core + UI first, then modules, then the config hub.
+Core.lua
+UI.lua
+InviteHelper.lua
+Config.lua
