@@ -1,0 +1,15 @@
+# Build instructions for the BigWigs packager (run by the release workflow).
+# https://github.com/BigWigsMods/packager
+package-as: OppositeQOL
+
+# This addon bundles no external libraries, so skip the separate "-nolib" zip.
+enable-nolib-creation: no
+
+# Kept in the repo for development, but excluded from the packaged addon.
+ignore:
+  - README.md
+  - tests
+  - .github
+  - .gitignore
+  - .gitattributes
+  - .editorconfig

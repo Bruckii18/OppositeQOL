@@ -25,7 +25,13 @@ needed.
 
 ## Installation
 
-Copy the `OppositeQOL` folder into your AddOns directory:
+**Addon manager (recommended):** install from this repo's
+[Releases](https://github.com/Bruckii18/OppositeQOL/releases) — each tagged
+version is published as a packaged zip, so managers like WoWUp can keep it
+updated automatically.
+
+**Manual:** download the latest release zip and extract the `OppositeQOL` folder
+into your AddOns directory:
 
 ```
 World of Warcraft/_retail_/Interface/AddOns/OppositeQOL/

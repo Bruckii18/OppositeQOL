@@ -10,5 +10,6 @@
 # Lua
 *.luac
 
-# WoW packager output
+# BigWigs packager output
 .release/
+.install/

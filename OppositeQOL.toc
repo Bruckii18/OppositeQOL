@@ -2,7 +2,8 @@
 ## Title: OppositeQOL
 ## Notes: Quality-of-life tools for raid leaders.|nModule 1: Invite Helper.
 ## Author: Michael
-## Version: 0.1.0
+## X-Website: https://github.com/Bruckii18/OppositeQOL
+## Version: @project-version@
 ## SavedVariables: OppositeQOLDB
 ## IconTexture: Interface\ICONS\INV_Misc_GroupLooking
 
