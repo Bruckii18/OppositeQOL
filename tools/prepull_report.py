@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OppositeQOL — Prepull report (companion log parser).
+r"""OppositeQOL — Prepull report (companion log parser).
 
 The in-game addon can tell you *when* a pull happened and how early/late it was
 versus the DBM/BigWigs timer, but in Midnight (12.0) it can no longer see the
@@ -20,8 +20,20 @@ real culprit *and* the "X.XXs early/late" the log alone can't compute.
   => prepuller resolved as Torm, via the totem.
 
 Usage:
-    python3 tools/prepull_report.py <WoWCombatLog.txt> [--sv <OppositeQOL.lua>]
-                                    [--window 10] [--json]
+    # zero-config -- newest combat log + auto-detected timing, all pulls:
+    python3 prepull_report.py
+
+    # or point it at specific files:
+    python3 prepull_report.py <WoWCombatLog.txt> [--sv <OppositeQOL.lua>] [--last]
+
+When run without paths it locates your WoW '_retail_' folder (the usual install
+spots, next to this script, or $OQOL_WOW_DIR / --wow), then the newest
+WoWCombatLog*.txt under Logs/ and the OppositeQOL.lua under WTF/Account/.
+
+Set it up once and never pass a path again -- point --save at your OppositeQOL.lua
+and it works out the WoW folder (and thus the newest log) from there:
+    python3 prepull_report.py --sv "D:\...\SavedVariables\OppositeQOL.lua" --save
+    python3 prepull_report.py --last         # remembered; no paths needed
 
 No third-party dependencies; Python 3.9+.
 """
@@ -31,6 +43,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import csv
+import glob
 import json
 import os
 import re
@@ -241,7 +254,6 @@ class Pull:
     # filled in by the merge step:
     timing_diff: Optional[float] = None   # seconds vs the pull timer (negative = early)
     timing_source: Optional[str] = None
-    addon_guess: Optional[str] = None     # what OppositeQOL recorded in-game
 
 
 def _encounter_starts(events):
@@ -503,18 +515,8 @@ def extract_addon_pulls(db: dict) -> list:
                     "localTime": rec.get("localTime"),
                     "pullTimeDiff": rec.get("pullTimeDiff"),
                     "encounterName": rec.get("encounterName"),
-                    "pullerName": rec.get("pullerName"),
-                    "pullerClass": rec.get("pullerClass"),
                 })
     return out
-
-
-def _addon_guess_label(rec: dict) -> str:
-    name = rec.get("pullerName")
-    if name:
-        return name
-    cls = rec.get("pullerClass")
-    return f"[Unknown {cls}]" if cls else "[Unknown]"
 
 
 def merge_timing(pulls, addon_pulls, tolerance=180.0):
@@ -551,7 +553,6 @@ def merge_timing(pulls, addon_pulls, tolerance=180.0):
         if best is not None and best_gap <= tolerance:
             pull.timing_diff = best.get("pullTimeDiff")
             pull.timing_source = "OppositeQOL"
-            pull.addon_guess = _addon_guess_label(best)
     return pulls
 
 
@@ -629,10 +630,6 @@ def render_text(pulls, log_path, color=None):
                 key = "yellow" if "EARLY" in timing else "red" if "late" in timing else "dim"
                 line += "  (" + c(timing, key) + ")"
             out.append(line)
-            if pull.addon_guess and pull.puller and pull.puller.is_player \
-                    and pull.addon_guess not in (pull.puller.name or ""):
-                out.append("      " + c("addon saw", "dim") + " "
-                           + c(f"{pull.addon_guess}  (in-game guess, now corrected)", "grey"))
             tally[puller] = tally.get(puller, 0) + 1
         out.append("")
 
@@ -658,9 +655,135 @@ def render_json(pulls) -> str:
             },
             "timingDiff": pull.timing_diff,
             "timingSource": pull.timing_source,
-            "addonGuess": pull.addon_guess,
         }
     return json.dumps([as_dict(p) for p in pulls], indent=2, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# File discovery -- find the combat log and SavedVariables under the WoW folder
+# ---------------------------------------------------------------------------
+# So the tool can run with no arguments. A WoW "flavor" dir (e.g. _retail_) holds
+# both Logs/WoWCombatLog*.txt and WTF/Account/<ACCOUNT>/SavedVariables/, so once
+# we find that dir we can find both files.
+_FLAVORS = ("_retail_", "_ptr_", "_xptr_", "_beta_",
+            "_classic_", "_classic_era_", "_classic_ptr_", "_classic_era_ptr_")
+
+# Default install roots (the folder that *contains* the flavor dirs), per OS.
+_COMMON_WOW_DIRS = (
+    r"C:\Program Files (x86)\World of Warcraft",
+    r"C:\Program Files\World of Warcraft",
+    "/Applications/World of Warcraft",
+    os.path.expanduser("~/Applications/World of Warcraft"),
+)
+
+
+def _is_wow_flavor_dir(path: str) -> bool:
+    """True for a flavor dir -- one that directly holds Logs/ and WTF/."""
+    return os.path.isdir(os.path.join(path, "Logs")) and \
+        os.path.isdir(os.path.join(path, "WTF"))
+
+
+def _ascend_for_flavor_dir(start: str) -> Optional[str]:
+    """Walk upward from `start` to the first flavor dir, or None.
+
+    Lets the script orient itself when dropped anywhere inside the WoW tree
+    (even Interface/AddOns/OppositeQOL/tools).
+    """
+    cur, prev = os.path.abspath(start), None
+    while cur != prev:
+        if _is_wow_flavor_dir(cur):
+            return cur
+        prev, cur = cur, os.path.dirname(cur)
+    return None
+
+
+def _resolve_flavor_dir(path: str) -> Optional[str]:
+    """Turn a user-supplied path into a usable flavor dir: accepts the flavor dir
+    itself, the install root that contains _retail_ etc., or any dir inside."""
+    path = os.path.abspath(os.path.expanduser(path))
+    if _is_wow_flavor_dir(path):
+        return path
+    for flavor in _FLAVORS:                       # an install root holding flavors
+        cand = os.path.join(path, flavor)
+        if _is_wow_flavor_dir(cand):
+            return cand
+    return _ascend_for_flavor_dir(path)           # somewhere inside the tree
+
+
+def find_wow_dir(explicit=None, config_dir=None, log_hint=None, sv_hint=None) -> Optional[str]:
+    """Locate the WoW flavor dir: --wow, then $OQOL_WOW_DIR, then the saved
+    config, then next to the given log or SavedVariables, then next to this
+    script, then the usual install paths."""
+    for hint in (explicit, os.environ.get("OQOL_WOW_DIR"), config_dir):
+        if hint:
+            found = _resolve_flavor_dir(hint)
+            if found:
+                return found
+    starts = [os.path.dirname(os.path.abspath(p)) for p in (log_hint, sv_hint) if p]
+    starts.append(os.path.dirname(os.path.abspath(__file__)))
+    for start in starts:
+        found = _ascend_for_flavor_dir(start)
+        if found:
+            return found
+    for base in _COMMON_WOW_DIRS:
+        found = _resolve_flavor_dir(base)
+        if found:
+            return found
+    return None
+
+
+def find_latest_log(wow_dir: str) -> Optional[str]:
+    """Newest WoWCombatLog*.txt in <wow_dir>/Logs, or None."""
+    logs = glob.glob(os.path.join(wow_dir, "Logs", "WoWCombatLog*.txt"))
+    return max(logs, key=os.path.getmtime) if logs else None
+
+
+def find_savedvariables(wow_dir: str) -> Optional[str]:
+    """Newest OppositeQOL.lua across all account profiles, or None."""
+    pattern = os.path.join(wow_dir, "WTF", "Account", "*", "SavedVariables", "OppositeQOL.lua")
+    matches = glob.glob(pattern)
+    return max(matches, key=os.path.getmtime) if matches else None
+
+
+# ---------------------------------------------------------------------------
+# Saved settings -- a tiny JSON file so the location can be set once
+# ---------------------------------------------------------------------------
+# `--save` remembers your WoW folder (and an explicit --sv) in your home dir, so
+# later runs need no arguments at all. It is plain JSON: hand-edit it, or delete
+# it to reset.
+def _config_path() -> str:
+    return os.path.join(os.path.expanduser("~"), ".prepull_report.json")
+
+
+def load_config() -> dict:
+    try:
+        with open(_config_path(), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_config(values: dict) -> str:
+    """Merge the non-empty `values` into the config file; return its path."""
+    data = load_config()
+    data.update({k: v for k, v in values.items() if v})
+    path = _config_path()
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+    return path
+
+
+def _settings_to_save(args, wow_dir) -> dict:
+    """What --save persists: the WoW folder (from --wow, an explicit --sv's
+    location, or whatever was auto-detected) plus an explicit --sv path."""
+    wdir = _resolve_flavor_dir(args.wow) if args.wow else None
+    if not wdir and args.sv:
+        wdir = _ascend_for_flavor_dir(os.path.dirname(os.path.abspath(os.path.expanduser(args.sv))))
+    saved = {"wow_dir": wdir or wow_dir}
+    if args.sv:
+        saved["sv"] = os.path.abspath(os.path.expanduser(args.sv))
+    return {k: v for k, v in saved.items() if v}
 
 
 # ---------------------------------------------------------------------------
@@ -680,9 +803,21 @@ def run(log_path, sv_path=None, window=10.0, post=15.0, gap=3.0, tolerance=180.0
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Resolve who really prepulled each boss from WoWCombatLog.txt, "
-                    "merging OppositeQOL's recorded pull timing.")
-    ap.add_argument("log", help="path to WoWCombatLog.txt")
-    ap.add_argument("--sv", help="path to OppositeQOL.lua SavedVariables (for timing)")
+                    "merging OppositeQOL's recorded pull timing. With no arguments, "
+                    "uses the newest combat log and auto-detected timing.")
+    ap.add_argument("log", nargs="?",
+                    help="path to WoWCombatLog*.txt (default: newest in the WoW Logs folder)")
+    ap.add_argument("--sv",
+                    help="path to OppositeQOL.lua SavedVariables (default: auto-detected); "
+                         "adds the early/late timing")
+    ap.add_argument("--wow",
+                    help="path to your World of Warcraft '_retail_' folder, used when the log "
+                         "or SavedVariables can't be found automatically (same as $OQOL_WOW_DIR)")
+    ap.add_argument("--no-sv", action="store_true",
+                    help="don't merge SavedVariables timing, even if it is found")
+    ap.add_argument("--save", action="store_true",
+                    help="remember --wow / --sv (or the auto-detected WoW folder) in "
+                         "~/.prepull_report.json, so future runs need no arguments")
     ap.add_argument("--window", type=float, default=10.0,
                     help="seconds before ENCOUNTER_START to scan for the puller (default 10)")
     ap.add_argument("--gap", type=float, default=3.0,
@@ -697,9 +832,49 @@ def main(argv=None):
                     help="show only the most recent pull (e.g. the attempt you just wiped on)")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of text")
     args = ap.parse_args(argv)
+    config = load_config()
+
+    # Resolve the log and SavedVariables, auto-detecting whatever wasn't given.
+    # Precedence: explicit flag > $OQOL_WOW_DIR > saved config > auto-detect.
+    log_path, sv_path = args.log, args.sv
+    if not sv_path and not args.no_sv:
+        cand = config.get("sv")
+        if cand and os.path.exists(cand):
+            sv_path = cand                      # remembered by a previous --save
+    need_wow = (not log_path) or (not sv_path and not args.no_sv) or args.save
+    wow_dir = find_wow_dir(args.wow, config_dir=config.get("wow_dir"),
+                           log_hint=log_path, sv_hint=sv_path) if need_wow else None
+
+    if args.save:
+        saved = _settings_to_save(args, wow_dir)
+        if saved.get("wow_dir"):
+            print(f"· saved settings to {save_config(saved)}", file=sys.stderr)
+        else:
+            print("· --save: couldn't resolve a WoW folder to remember -- "
+                  "run it once with --wow or --sv too.", file=sys.stderr)
+
+    if not log_path:
+        if not wow_dir:
+            print("error: couldn't find your World of Warcraft folder. Pass the log path, "
+                  "or point --wow (or $OQOL_WOW_DIR) at your '_retail_' folder.", file=sys.stderr)
+            return 2
+        log_path = find_latest_log(wow_dir)
+        if not log_path:
+            print(f"error: no WoWCombatLog*.txt in {os.path.join(wow_dir, 'Logs')} -- "
+                  "is combat logging on (/combatlog)?", file=sys.stderr)
+            return 2
+        print(f"· log:    {log_path}", file=sys.stderr)
+
+    if args.no_sv:
+        sv_path = None
+    else:
+        if not sv_path and wow_dir:
+            sv_path = find_savedvariables(wow_dir)
+        if sv_path and not args.sv:             # note auto/remembered timing source
+            print(f"· timing: {sv_path}", file=sys.stderr)
 
     try:
-        pulls = run(args.log, args.sv, args.window, args.post, args.gap, args.tolerance)
+        pulls = run(log_path, sv_path, args.window, args.post, args.gap, args.tolerance)
     except FileNotFoundError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -709,7 +884,7 @@ def main(argv=None):
         return 1
     if args.last:
         pulls = pulls[-1:]
-    print(render_json(pulls) if args.json else render_text(pulls, args.log))
+    print(render_json(pulls) if args.json else render_text(pulls, log_path))
     return 0
 
 

@@ -71,14 +71,46 @@ curl -O https://raw.githubusercontent.com/Bruckii18/OppositeQOL/main/tools/prepu
 
 ### Usage
 
-Point it at your combat-log file:
+Run it with no arguments — it finds the newest combat log and your timing data
+on its own:
 
 ```sh
-# all pulls in the log
-python3 prepull_report.py "World of Warcraft/_retail_/Logs/WoWCombatLog.txt"
+# newest combat log, with timing, all pulls
+python3 prepull_report.py
 
-# only the most recent pull
-python3 prepull_report.py "World of Warcraft/_retail_/Logs/WoWCombatLog.txt" --last
+# just the boss you most recently pulled
+python3 prepull_report.py --last
+```
+
+For that it needs to know where World of Warcraft is. It checks the usual install
+locations and the folder the script sits in, but if your game is elsewhere (a
+second drive, a custom path), set it up **once** with `--save`: point it at your
+`OppositeQOL.lua` and it works out the rest — your WoW folder, and from there the
+newest combat log — then remembers it.
+
+```sh
+# one time (this run also prints the report).
+# <ACCOUNT> is your account-ID folder under WTF\Account, e.g. 468804367#1:
+python3 prepull_report.py --sv "D:\...\World of Warcraft\_retail_\WTF\Account\<ACCOUNT>\SavedVariables\OppositeQOL.lua" --save
+
+# from then on, no arguments needed:
+python3 prepull_report.py --last
+```
+
+`--save` stores the paths in `~/.prepull_report.json` (a small text file you can
+edit or delete to reset). Pointing at the game folder instead works the same
+(`--wow "…\_retail_" --save`), as does the `OQOL_WOW_DIR` environment variable:
+
+```sh
+# Windows (new terminals): setx OQOL_WOW_DIR "D:\Games\World of Warcraft\_retail_"
+# macOS / Linux:           export OQOL_WOW_DIR="/path/to/World of Warcraft/_retail_"
+```
+
+The notes printed before the report (`· log:` / `· timing:`) show which files were
+picked. You can always pass paths explicitly to override:
+
+```sh
+python3 prepull_report.py "…/Logs/WoWCombatLog.txt" --sv "…/SavedVariables/OppositeQOL.lua"
 ```
 
 Example output:
@@ -88,23 +120,39 @@ OppositeQOL · Prepull report
 WoWCombatLog.txt  ·  2 pull(s)
 
   2026-01-01 20:00:00  ·  <boss>
-      pulled by <player> using <ability>
-  2026-01-01 20:05:00  ·  <boss>
-      pulled by <player> using <ability>
+      pulled by <player> using <ability>  (1.20s EARLY)
 
-  Prepull leaderboard
+  2026-01-01 20:05:00  ·  <boss>
+      pulled by <player> using <ability>  (0.45s late)
+
+Prepull leaderboard
    1. <player>  ×2
 ```
+
+The `(1.20s EARLY)` / `(0.45s late)` at the end of each line is the timing read
+from your SavedVariables — it appears once those are found (auto-detected, or via
+`--sv` / `--save`). Without them you still get *who* pulled, *when*, and with
+*which ability*, just no early/late figure.
 
 **Options:**
 
 - `--last` — show only the most recent pull (e.g. the attempt you just wiped on)
-- `--sv <SavedVariables file>` — also show how early/late each pull was
+- `--sv <file>` — use a specific SavedVariables file (otherwise auto-detected);
+  this is what adds the early/late timing to each pull
+- `--wow <folder>` — your `_retail_` folder, if it isn't found automatically
+  (same as the `OQOL_WOW_DIR` environment variable)
+- `--save` — remember `--wow`/`--sv` (or the auto-detected folder) in
+  `~/.prepull_report.json`, so future runs need no arguments
+- `--no-sv` — skip the timing merge entirely
 - `--window N` — seconds before the pull to scan for the puller (default 10)
 - `--gap N` — largest pause still counted as one pull, so an isolated early debuff
   isn't mistaken for the puller (default 3)
 - `--json` — machine-readable output
 - `NO_COLOR=1` — disable colored output
+
+> The early/late timing comes from the addon's SavedVariables, which WoW only
+> writes on `/reload` or logout — reload before running the tool if you want the
+> very latest pulls' timing.
 
 The tool only *reads* the log and prints to the console — nothing is written back
 into the game, so you can run it anytime, even mid-raid with the game open. Keep

@@ -11,6 +11,7 @@ SPELL_SUMMON -- exactly what the in-game addon cannot do.
 
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import prepull_report as pr  # noqa: E402
@@ -47,8 +48,6 @@ OppositeQOLDB = {
 \t\t\t\t\t\t["encounterID"] = 3183,
 \t\t\t\t\t\t["encounterName"] = "Midnight Falls",
 \t\t\t\t\t\t["pullTimeDiff"] = -2.34,
-\t\t\t\t\t\t["pullerClass"] = "ROGUE",
-\t\t\t\t\t\t["pullerIsTank"] = false,
 \t\t\t\t\t},
 \t\t\t\t},
 \t\t\t},
@@ -158,7 +157,6 @@ check("gap: a huge --gap reverts to the earliest action (control)",
 pr.merge_timing(pulls, addon_pulls)
 check("lura: addon timing merged in", lura.timing_source == "OppositeQOL"
       and abs((lura.timing_diff or 0) + 2.34) < 1e-9)
-check("lura: addon's own (wrong) guess captured", lura.addon_guess == "[Unknown ROGUE]")
 check("boss2: no addon record -> no timing", gate.timing_source is None)
 
 # ---- console rendering (color off for stable substring checks) -------------
@@ -168,7 +166,8 @@ check("report shows WHEN (timestamp)", "2026-06-17 22:14:32" in text)
 check("report shows WHICH ABILITY (and the totem behind it)",
       "using Earthbind (Earthbind Totem)" in text)
 check("report shows the early timing", "2.34s EARLY" in text)
-check("report contrasts the addon's wrong guess", "[Unknown ROGUE]" in text)
+check("no vestigial 'addon saw [Unknown]' line (addon records no puller guess)",
+      "addon saw" not in text)
 check("report has a leaderboard when there are several pulls", "Prepull leaderboard" in text)
 check("log-only pull (no addon timing) omits the timing noise",
       "timing n/a" not in pr.render_text([gate], "x", color=False))
@@ -184,6 +183,64 @@ check("--last drops the single-entry leaderboard", "leaderboard" not in last_onl
 
 js = pr.render_json(pulls)
 check("json output is valid + names puller", '"Torm-Drak\'thul-EU"' in js or "Torm-Drak" in js)
+
+# ---- file discovery (zero-arg ergonomics) ----------------------------------
+# Build a fake WoW tree and confirm the log + SavedVariables are found by shape,
+# so `python3 prepull_report.py` with no paths can locate both itself.
+with tempfile.TemporaryDirectory() as _root:
+    flavor = os.path.join(_root, "_retail_")
+    logs_dir = os.path.join(flavor, "Logs")
+    sv_dir = os.path.join(flavor, "WTF", "Account", "ACC#1", "SavedVariables")
+    nested = os.path.join(flavor, "Interface", "AddOns", "OppositeQOL", "tools")
+    for d in (logs_dir, sv_dir, nested):
+        os.makedirs(d)
+    old_log = os.path.join(logs_dir, "WoWCombatLog-010125_000000.txt")
+    new_log = os.path.join(logs_dir, "WoWCombatLog-020125_000000.txt")
+    sv_file = os.path.join(sv_dir, "OppositeQOL.lua")
+    for p in (old_log, new_log, sv_file):
+        with open(p, "w") as fh:
+            fh.write("x")
+    os.utime(old_log, (1000, 1000))
+    os.utime(new_log, (2000, 2000))   # newer -> should win
+
+    check("flavor dir recognized by Logs/ + WTF/", pr._is_wow_flavor_dir(flavor))
+    check("resolve from the install root finds _retail_",
+          pr._resolve_flavor_dir(_root) == flavor)
+    check("resolve from the flavor dir returns it",
+          pr._resolve_flavor_dir(flavor) == flavor)
+    check("ascend from a nested dir finds the flavor dir",
+          pr._ascend_for_flavor_dir(nested) == flavor)
+    check("explicit --wow path wins", pr.find_wow_dir(explicit=flavor) == flavor)
+    check("a --sv path locates the WoW dir (so newest-log works from --sv alone)",
+          pr.find_wow_dir(sv_hint=sv_file) == flavor)
+    check("newest combat log is picked", pr.find_latest_log(flavor) == new_log)
+    check("savedvariables located across accounts",
+          pr.find_savedvariables(flavor) == sv_file)
+    check("no log dir -> None", pr.find_latest_log(os.path.join(_root, "_classic_")) is None)
+
+    # ---- saved settings (`--save` / set-once config) -----------------------
+    import argparse as _argparse
+    cfg = os.path.join(_root, "config.json")
+    _orig_config_path = pr._config_path
+    pr._config_path = lambda: cfg
+    try:
+        check("config: missing file reads as empty", pr.load_config() == {})
+        pr.save_config({"wow_dir": flavor, "sv": sv_file, "blank": ""})
+        loaded = pr.load_config()
+        check("config: round-trips wow_dir + sv",
+              loaded.get("wow_dir") == flavor and loaded.get("sv") == sv_file)
+        check("config: empty values are dropped on save", "blank" not in loaded)
+        check("config: feeds find_wow_dir via config_dir",
+              pr.find_wow_dir(config_dir=flavor) == flavor)
+        check("config: explicit --wow still overrides the saved config",
+              pr.find_wow_dir(explicit=flavor,
+                              config_dir=os.path.join(_root, "does-not-exist")) == flavor)
+        # `--save` with only --sv derives the WoW folder from the SV file's path.
+        saved = pr._settings_to_save(_argparse.Namespace(wow=None, sv=sv_file), None)
+        check("config: _settings_to_save derives wow_dir from --sv",
+              saved.get("wow_dir") == flavor and saved.get("sv") == os.path.abspath(sv_file))
+    finally:
+        pr._config_path = _orig_config_path
 
 print("\nALL TESTS PASSED" if _ok else "\nSOME TESTS FAILED")
 sys.exit(0 if _ok else 1)
