@@ -49,50 +49,69 @@ hide it with `/oqol minimap`.
 ## Companion tool — Prepull report
 
 Since Midnight (12.0), addons can no longer read the combat log live, so the
-in-game **Who Pulled** module can't always name the real prepuller — a pull set
-off by a totem, pet, trap or DoT shows up as a wrong or `[Unknown]` actor. The
-combat log *file* (`WoWCombatLog.txt`, written while logging is on) still records
-all of it, so a small offline script can recover the truth after the session.
+in-game **Who Pulled** module can only *guess* the puller and mislabels pulls set
+off by a totem, pet, trap or DoT. The combat log *file* (`WoWCombatLog.txt`,
+written while combat logging is on) still records everything, so a small offline
+script can recover the truth after a session.
 
-`tools/prepull_report.py` reads that file and, for every `ENCOUNTER_START`, tells
-you **who** pulled, **when**, and **which ability** did it — chaining totem / pet
-GUIDs back to their owner via `SPELL_SUMMON`. With `--sv` it also merges the timing
-OppositeQOL saved, adding how early or late each pull was.
+`tools/prepull_report.py` reads that log file and, for every boss pull, reports
+**who** pulled, **when**, and **which ability** did it — tracing totem and pet
+abilities back to the player who owns them. Optionally it also shows how early or
+late each pull was versus the pull timer.
+
+### Installation
+
+It is a single self-contained file with **no dependencies** — just Python 3.9+
+(already installed on macOS and Linux; on Windows, install it from python.org).
+It is **not** part of the addon download; get the one file:
 
 ```sh
-# every pull in the log
-python3 tools/prepull_report.py "World of Warcraft/_retail_/Logs/WoWCombatLog.txt"
-
-# just the most recent pull (e.g. the attempt you just wiped on)
-python3 tools/prepull_report.py "World of Warcraft/_retail_/Logs/WoWCombatLog.txt" --last
+curl -O https://raw.githubusercontent.com/Bruckii18/OppositeQOL/main/tools/prepull_report.py
 ```
+
+(Or download the repository as a ZIP and take `tools/prepull_report.py` out of it.)
+
+### Usage
+
+Point it at your combat-log file:
+
+```sh
+# all pulls in the log
+python3 prepull_report.py "World of Warcraft/_retail_/Logs/WoWCombatLog.txt"
+
+# only the most recent pull
+python3 prepull_report.py "World of Warcraft/_retail_/Logs/WoWCombatLog.txt" --last
+```
+
+Example output:
 
 ```
 OppositeQOL · Prepull report
 WoWCombatLog.txt  ·  2 pull(s)
 
-  2026-06-17 22:14:32  ·  L'ura
-      pulled by Torm-Drak'thul-EU using Earthbind (Earthbind Totem)  (2.34s EARLY)
-      addon saw [Unknown ROGUE]  (in-game guess, now corrected)
-
-  2026-06-17 22:31:05  ·  Belo'ren
-      pulled by Tankzor-Drak'thul-EU using Melee
+  2026-01-01 20:00:00  ·  <boss>
+      pulled by <player> using <ability>
+  2026-01-01 20:05:00  ·  <boss>
+      pulled by <player> using <ability>
 
   Prepull leaderboard
-   1. Torm-Drak'thul-EU  ×1
-   2. Tankzor-Drak'thul-EU  ×1
+   1. <player>  ×2
 ```
 
-It only *reads* the log and prints to the console — nothing is written back into
-the game, so you can run it anytime, even mid-raid with WoW open. `--last` shows
-just the most recent pull; add `--sv <OppositeQOL.lua>` for the early/late timing
-(and the "addon saw" correction); `--json` emits machine-readable output;
-`--window` sets how many seconds before the pull to scan (default 10); `--gap`
-sets the largest pause (default 3s) still treated as one pull, so an isolated early
-debuff — e.g. a Hunter's Mark applied 12s before nothing happens — isn't mistaken
-for the puller. Output is colorized on a terminal (disable with `NO_COLOR=1`).
-Pure Python 3.9+, no dependencies. Keep an auto-logger (or `/combatlog`) on during
-the raid; the **Combat Log Status** dot tells you at a glance whether it is.
+**Options:**
+
+- `--last` — show only the most recent pull (e.g. the attempt you just wiped on)
+- `--sv <SavedVariables file>` — also show how early/late each pull was
+- `--window N` — seconds before the pull to scan for the puller (default 10)
+- `--gap N` — largest pause still counted as one pull, so an isolated early debuff
+  isn't mistaken for the puller (default 3)
+- `--json` — machine-readable output
+- `NO_COLOR=1` — disable colored output
+
+The tool only *reads* the log and prints to the console — nothing is written back
+into the game, so you can run it anytime, even mid-raid with the game open. Keep
+combat logging on during the raid (an auto-logger, or `/combatlog`); the **Combat
+Log Status** dot shows whether it is.
 
 ## Installation
 
