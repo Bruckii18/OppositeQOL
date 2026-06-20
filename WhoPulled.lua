@@ -1,15 +1,15 @@
--- OppositeQOL - Who Pulled
--- Calls out who pulled the boss, how early/late it was vs the DBM/BigWigs pull
--- timer, plays an optional alarm, and keeps a per-night leaderboard of pulls.
+-- OppositeQOL - PrePull
+-- Detects each raid boss pull and how early/late it was vs the DBM/BigWigs (or
+-- Blizzard) pull timer, shows a local banner, plays an optional alarm, and keeps
+-- a per-night timing log you can post to chat.
 --
--- Midnight (12.0) reality this module is built around:
---   * COMBAT_LOG_EVENT_UNFILTERED errors on register and combat data is
---     "secret" during raid/M+ encounters, so "first hit via combat log" is NOT
---     possible at pull time. We resolve the puller from the two sanctioned
---     signals instead (boss target, then C_DamageMeter) -- see ResolvePuller.
---   * Addon-initiated chat is blocked in combat, so live pulls show a local
---     BANNER (RaidWarningFrame); the shareable artifact is the leaderboard,
---     posted to chat out of combat.
+-- It deliberately does NOT try to name *who* pulled. In Midnight (12.0) addons
+-- can't read the combat log live, so the puller could only ever be guessed (boss
+-- target, then damage meter) -- which was wrong exactly for the interesting cases
+-- (a pull set off by a totem, pet, trap or DoT). Naming the puller accurately is
+-- the job of the companion log parser (tools/prepull_report.py, see the README),
+-- which reads WoWCombatLog.txt after the session. This module records the pull
+-- timing it lines up with.
 
 local addonName, ns = ...
 
@@ -17,8 +17,8 @@ local M = {}
 ns.WhoPulled = M
 ns:RegisterModule("whoPulled", M)
 
-M.name    = "Who Pulled"
-M.desc    = "Who pulled, how early/late vs the pull timer, with a leaderboard."
+M.name    = "PrePull"
+M.desc    = "How early/late each boss was pulled vs the timer, with an alarm and a log."
 M.default = true
 M.hasUI   = true
 
@@ -28,35 +28,20 @@ M.hasUI   = true
 local DEFAULTS = {
     sound           = false,   -- opt-in: play an alarm on each announced pull
     soundName       = "Raid Warning",  -- which alarm (see M:SoundList)
-    chatAnnounce    = false,   -- opt-in: post the prepuller to chat (deferred)
-    chatChannel     = "AUTO",  -- AUTO (group) | SAY | YELL
     onTimeWindow    = 0.25,    -- +/- seconds around 0 still counts as "on time"
     maxPullTimeDiff = 10,      -- if |now - expected| exceeds this, treat as untimed
     decimals        = 2,       -- decimals shown in the seconds value
     announceEarly   = true,    -- show a banner for each timing class (recording
-    announceOnTime  = true,    -- always happens regardless, so the leaderboard
-    announceLate    = true,    -- stays complete even with banners off)
+    announceOnTime  = true,    -- always happens regardless, so the log stays
+    announceLate    = true,    -- complete even with banners off)
     announceUntimed = true,
 }
 
--- Midnight: some API returns "secret" values that throw on compare / table-key
--- use. Guard every name/class/GUID before touching it.
-local issecretvalue = _G.issecretvalue or function() return false end
-
 local LSM  -- LibSharedMedia-3.0, resolved lazily; false once probed and absent
 
-local kPollDelays = { 0.2, 0.5, 1.0, 2.0, 4.0 }  -- snapshot retries after pull
-local kSessionGap = 30 * 60                       -- new session after a 30m gap
+local kSessionGap = 30 * 60   -- start a new session after a 30-minute gap
 
 local GROUP_CHANNELS = { PARTY = true, RAID = true, INSTANCE_CHAT = true }
-
--- ===========================================================================
--- Small helpers
--- ===========================================================================
-local function safeStr(v)
-    if type(v) ~= "string" or issecretvalue(v) or v == "" then return nil end
-    return v
-end
 
 -- ===========================================================================
 -- Timing capture: DBM/BigWigs pull-timer message + Blizzard countdown
@@ -117,129 +102,8 @@ function M:ClassEnabled(kind)
 end
 
 -- ===========================================================================
--- Who pulled: boss target (preferred) -> damage meter (fallback)
+-- Alarm sounds
 -- ===========================================================================
-
--- The boss targets whoever holds aggro; at pull that's the puller (typically
--- the tank). This is the most reliable signal and doubles as the isTank flag.
-function M:GetPullerFromBossTarget()
-    for i = 1, 8 do
-        local unit = "boss" .. i .. "target"
-        if UnitExists(unit) and UnitIsPlayer(unit) then
-            local name, realm = UnitName(unit)
-            name = safeStr(name)
-            if name and name ~= UNKNOWN then
-                local _, classFile = UnitClass(unit)
-                realm = safeStr(realm)
-                return {
-                    name          = realm and (name .. "-" .. realm) or name,
-                    classFilename = safeStr(classFile),
-                    isTank        = true,  -- holding aggro == tank for this pull
-                }
-            end
-        end
-    end
-end
-
--- Map a resolved name back to its assigned group role, so a tank picked up via
--- the damage-meter path (which doesn't expose roles) still gets exempted.
-local function lookupRoleByName(playerName)
-    -- issecretvalue MUST be checked before any string op including ==.
-    if type(playerName) ~= "string" or issecretvalue(playerName) or playerName == "" then
-        return nil
-    end
-    local short = playerName:match("^([^-]+)") or playerName
-    local function matches(unit)
-        local n = GetUnitName(unit, true) or UnitName(unit)
-        if type(n) ~= "string" or issecretvalue(n) or n == "" then return false end
-        return n == playerName or (n:match("^([^-]+)") or n) == short
-    end
-    local ok, role = pcall(function()
-        if matches("player") then return UnitGroupRolesAssigned("player") end
-        local prefix = IsInRaid() and "raid" or "party"
-        for i = 1, (IsInRaid() and 40 or 4) do
-            local unit = prefix .. i
-            if UnitExists(unit) and matches(unit) then
-                return UnitGroupRolesAssigned(unit)
-            end
-        end
-    end)
-    return ok and role or nil
-end
-
-function M:GetPullerFromDamageMeter()
-    if not (C_DamageMeter and C_DamageMeter.GetCombatSessionFromType
-            and Enum and Enum.DamageMeterSessionType and Enum.DamageMeterType) then
-        return nil
-    end
-    local ok, session = pcall(C_DamageMeter.GetCombatSessionFromType,
-        Enum.DamageMeterSessionType.Current, Enum.DamageMeterType.DamageDone)
-    if not ok or not session or not session.combatSources then return nil end
-
-    -- Highest damage so far. Damage values may be secret-wrapped, so guard the
-    -- compare; if every compare throws, fall back to the first listed actor.
-    local best, bestTotal = nil, 0
-    for _, actor in ipairs(session.combatSources) do
-        local total = actor.totalAmount or actor.total
-        pcall(function()
-            if total and total > bestTotal then best, bestTotal = actor, total end
-        end)
-    end
-    if not best and #session.combatSources > 0 then best = session.combatSources[1] end
-
-    if best and not best.isTank and lookupRoleByName(best.name) == "TANK" then
-        best.isTank = true
-    end
-    return best
-end
-
-function M:ResolvePuller()
-    return self:GetPullerFromBossTarget() or self:GetPullerFromDamageMeter()
-end
-
--- ===========================================================================
--- Announce (local banner + optional alarm)
--- ===========================================================================
--- Bare name (no color), with class/Unknown fallbacks. Used for chat, which
--- doesn't render color escapes the way the banner does.
-function M:PlainName(actor)
-    if not actor then return "[Unknown]" end
-    local name  = safeStr(actor.name)
-    local class = safeStr(actor.classFilename)
-    return name or (class and ("[Unknown " .. class .. "]")) or "[Unknown]"
-end
-
-function M:FormatName(actor)
-    local display = self:PlainName(actor)
-    local class = actor and safeStr(actor.classFilename)
-    if class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[class] then
-        local c = RAID_CLASS_COLORS[class]
-        return format("|cff%02x%02x%02x%s|r", c.r * 255, c.g * 255, c.b * 255, display)
-    end
-    return display
-end
-
--- Tanks are supposed to pull -> drop the "early" flag for them.
-function M:ComposeMessage(ctx, nameStr, actor)
-    local namePart = " by " .. nameStr
-    if actor and actor.isTank and ctx.pullTimeDiff and ctx.pullTimeDiff < -self.onTimeWindow then
-        return "Boss pulled" .. namePart .. "."
-    end
-    return ctx.desc .. namePart .. "."
-end
-
-function M:BuildMessage(ctx, actor) return self:ComposeMessage(ctx, self:FormatName(actor), actor) end
-
--- Chat call-out for prepulls (early pulls only). Deliberately ignores the tank
--- exemption: the boss-target resolver marks every puller isTank, so exempting
--- tanks here would hide the actual culprit. An early pull is an early pull.
-function M:BuildPrepullChat(ctx, actor)
-    local secs = format("%." .. self.decimals .. "f", -(ctx.pullTimeDiff or 0))
-    local name = actor and safeStr(actor.name)
-    local culprit = name and ("Who prepulled? " .. name .. ".") or "Who prepulled? (couldn't identify)."
-    return format("%s: Prepulled the boss by %ssec. %s", addonName, secs, culprit)
-end
-
 -- Built-in game sounds (SOUNDKIT) -- always available, no library required.
 local BUILTIN = {
     { "Raid Warning",    "RAID_WARNING" },
@@ -292,6 +156,8 @@ function M:PlayAlarm()
     self:PlaySoundByName(self.soundName)
 end
 
+-- Local banner (RaidWarningFrame) + optional alarm. No chat: Midnight blocks
+-- addon chat in combat, and the shareable artifact is the log, posted manually.
 function M:Announce(msg)
     if RaidNotice_AddMessage and RaidWarningFrame then
         local info = ChatTypeInfo and ChatTypeInfo["RAID_WARNING"]
@@ -302,40 +168,8 @@ function M:Announce(msg)
     if self.sound then self:PlayAlarm() end
 end
 
-function M:ResolveChatChannel()
-    local ch = self.chatChannel or "AUTO"
-    if ch == "SAY" or ch == "YELL" then return ch end
-    if self.inRaid then return "RAID" elseif self.inParty then return "PARTY" end
-end
-
-function M:SendChat(msg)
-    local channel = self:ResolveChatChannel()
-    if not channel then return end
-    local sender = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
-    pcall(sender, msg, channel)
-end
-
--- Midnight blocks addon SendChatMessage during combat lockdown (it pops the
--- "action blocked" dialog and drops the line), so we can't call out the puller
--- live. Queue it and flush the instant the group leaves combat instead. Out of
--- combat we just send immediately.
-function M:AnnounceChat(msg)
-    if InCombatLockdown and InCombatLockdown() then
-        self.chatQueue = self.chatQueue or {}
-        if #self.chatQueue < 10 then self.chatQueue[#self.chatQueue + 1] = msg end
-    else
-        self:SendChat(msg)
-    end
-end
-
-function M:PLAYER_REGEN_ENABLED()
-    if not self.chatQueue then return end
-    for _, msg in ipairs(self.chatQueue) do self:SendChat(msg) end
-    self.chatQueue = nil
-end
-
 -- ===========================================================================
--- History: sessions + per-puller leaderboard
+-- History: per-session timing log
 -- ===========================================================================
 function M:GetOrCreateSession(ts)
     local sessions = self.db.sessions
@@ -356,23 +190,18 @@ function M:GetOrCreateSession(ts)
     return s
 end
 
-function M:RecordPull(ctx, actor)
+function M:RecordPull(ctx)
     if not (self.db and ctx) then return end
     local record = {
         ts            = (GetServerTime and GetServerTime()) or time(),
         -- Local wall-clock stamp in the same shape WoWCombatLog.txt uses, so the
         -- companion log parser (tools/prepull_report.py) can line each recorded
-        -- pull up with its ENCOUNTER_START line and graft the real puller (incl.
-        -- totem/pet prepulls, which the in-game resolvers can't see) onto our
-        -- timing. encounterID is the primary join key; the timestamp disambiguates
-        -- repeated pulls of the same boss.
+        -- pull up with its ENCOUNTER_START line and add the real puller. encounterID
+        -- is the primary join key; the timestamp disambiguates repeated pulls.
         localTime     = date and date("%Y-%m-%d %H:%M:%S") or nil,
         encounterID   = ctx.encounterID,
         encounterName = tostring(ctx.encounterName or "?"),
         pullTimeDiff  = ctx.pullTimeDiff,
-        pullerName    = actor and safeStr(actor.name) or nil,
-        pullerClass   = actor and safeStr(actor.classFilename) or nil,
-        pullerIsTank  = actor and actor.isTank or false,
     }
     local session = self:GetOrCreateSession(record.ts)
     session.pulls[#session.pulls + 1] = record
@@ -387,28 +216,6 @@ local function classifyShort(diff, window)
     return format("%.2fs late", diff)
 end
 
--- Aggregate pulls per puller (tanks already filtered out by the caller).
-local function aggregate(pulls)
-    local agg, order = {}, {}
-    for _, p in ipairs(pulls) do
-        local key = safeStr(p.pullerName)
-            or (safeStr(p.pullerClass) and ("[Unknown " .. p.pullerClass .. "]"))
-            or "[Unknown]"
-        local a = agg[key]
-        if not a then
-            a = { name = key, count = 0, early = 0, ontime = 0, late = 0, untimed = 0 }
-            agg[key], order[#order + 1] = a, a
-        end
-        a.count = a.count + 1
-        if not p.pullTimeDiff then a.untimed = a.untimed + 1
-        elseif p.pullTimeDiff <= -0.005 then a.early = a.early + 1
-        elseif p.pullTimeDiff < 0.005 then a.ontime = a.ontime + 1
-        else a.late = a.late + 1 end
-    end
-    table.sort(order, function(a, b) return a.count > b.count end)
-    return order
-end
-
 -- Pick the session to show: most recent in the current instance, else latest.
 local function resolveScope(sessions)
     if #sessions == 0 then return nil end
@@ -421,35 +228,35 @@ local function resolveScope(sessions)
     return sessions[#sessions]
 end
 
-function M:BuildLeaderboard()
+function M:BuildReport()
     local sessions = self.db and self.db.sessions or {}
     local session = resolveScope(sessions)
-    if not session then return "Who Pulled - no pulls recorded yet." end
-
-    local nonTank, tankHidden = {}, 0
-    for _, p in ipairs(session.pulls or {}) do
-        if p.pullerIsTank then tankHidden = tankHidden + 1 else nonTank[#nonTank + 1] = p end
+    if not (session and session.pulls and #session.pulls > 0) then
+        return "PrePull - no pulls recorded yet."
     end
 
-    local scope = tostring(session.instanceName or "?")
-    if #nonTank == 0 then
-        return format("Who Pulled - %s - no non-tank pulls recorded yet.", scope)
+    local pulls = session.pulls
+    local early, ontime, late, untimed = 0, 0, 0, 0
+    for _, p in ipairs(pulls) do
+        if not p.pullTimeDiff then untimed = untimed + 1
+        elseif p.pullTimeDiff <= -0.005 then early = early + 1
+        elseif p.pullTimeDiff < 0.005 then ontime = ontime + 1
+        else late = late + 1 end
     end
+    local summary = {}
+    if early   > 0 then summary[#summary + 1] = early   .. " early"    end
+    if late    > 0 then summary[#summary + 1] = late    .. " late"     end
+    if ontime  > 0 then summary[#summary + 1] = ontime  .. " on time"  end
+    if untimed > 0 then summary[#summary + 1] = untimed .. " untimed"  end
 
-    local lines = {}
-    lines[#lines + 1] = format("Who Pulled - %s - %d non-tank pull%s%s",
-        scope, #nonTank, #nonTank == 1 and "" or "s",
-        tankHidden > 0 and format(" (%d tank pulls hidden)", tankHidden) or "")
-
-    local agg = aggregate(nonTank)
-    for i, a in ipairs(agg) do
-        local parts = {}
-        if a.early   > 0 then parts[#parts + 1] = a.early   .. " early"   end
-        if a.late    > 0 then parts[#parts + 1] = a.late    .. " late"    end
-        if a.ontime  > 0 then parts[#parts + 1] = a.ontime  .. " on time" end
-        if a.untimed > 0 then parts[#parts + 1] = a.untimed .. " untimed" end
-        lines[#lines + 1] = format("%2d. %s - %d (%s)", i, a.name, a.count,
-            #parts > 0 and table.concat(parts, ", ") or "-")
+    local lines = { format("PrePull - %s - %d pull%s%s",
+        tostring(session.instanceName or "?"), #pulls, #pulls == 1 and "" or "s",
+        #summary > 0 and (" (" .. table.concat(summary, ", ") .. ")") or "") }
+    for i, p in ipairs(pulls) do
+        local clock = p.localTime and p.localTime:match("(%d%d:%d%d:%d%d)$")
+        lines[#lines + 1] = format("%2d. %s%s - %s", i,
+            clock and (clock .. "  ") or "", tostring(p.encounterName or "?"),
+            classifyShort(p.pullTimeDiff))
     end
     return table.concat(lines, "\n")
 end
@@ -457,15 +264,12 @@ end
 -- ===========================================================================
 -- Encounter flow
 -- ===========================================================================
-function M:FirePull(ctx, actor)
-    ctx.recorded, ctx.puller = true, actor
+function M:FirePull(ctx)
+    ctx.recorded = true
     if self:ClassEnabled(ctx.kind) then
-        self:Announce(self:BuildMessage(ctx, actor))            -- local banner + sound
+        self:Announce(ctx.desc .. ".")   -- local banner + optional alarm (timing only)
     end
-    if self.chatAnnounce and ctx.kind == "early" then
-        self:AnnounceChat(self:BuildPrepullChat(ctx, actor))    -- deferred chat call-out
-    end
-    self:RecordPull(ctx, actor)
+    self:RecordPull(ctx)
 end
 
 function M:PLAYER_ENTERING_WORLD()
@@ -508,37 +312,7 @@ function M:ENCOUNTER_START(encounterID, encounterName)
         pullTime = now, pullTimeDiff = diff, kind = kind, desc = desc,
         encounterID = encounterID, encounterName = encounterName,
     }
-
-    -- Boss target is often already set at engage -> fire immediately. Otherwise
-    -- the damage-meter event + polling resolve it over the next few seconds.
-    local immediate = self:GetPullerFromBossTarget()
-    if immediate then
-        self:FirePull(self.pullContext, immediate)
-    end
-    C_Timer.After(kPollDelays[1], function() self:Poll(now, 1) end)
-end
-
--- Fires the soonest the damage meter populates; usually beats the poll loop.
-function M:DAMAGE_METER_COMBAT_SESSION_UPDATED()
-    local ctx = self.pullContext
-    if not ctx or ctx.recorded then return end
-    local actor = self:ResolvePuller()
-    if actor then self:FirePull(ctx, actor) end
-end
-
-function M:Poll(pullTime, index)
-    local ctx = self.pullContext
-    if not ctx or ctx.pullTime ~= pullTime or ctx.recorded then return end
-
-    local actor = self:ResolvePuller()
-    if actor then
-        self:FirePull(ctx, actor)
-    elseif kPollDelays[index + 1] then
-        C_Timer.After(kPollDelays[index + 1] - kPollDelays[index],
-            function() self:Poll(pullTime, index + 1) end)
-    else
-        self:FirePull(ctx, nil)  -- exhausted -> record as [Unknown]
-    end
+    self:FirePull(self.pullContext)
 end
 
 -- ===========================================================================
@@ -577,7 +351,7 @@ function M:PostReport(channel)
     end
     local sender = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
     local n = 0
-    for line in self:BuildLeaderboard():gmatch("[^\n]+") do
+    for line in self:BuildReport():gmatch("[^\n]+") do
         sender(line, channel)
         n = n + 1
     end
@@ -585,13 +359,13 @@ function M:PostReport(channel)
 end
 
 function M:RefreshReport()
-    if frame then frame.edit:SetText(self:BuildLeaderboard()) end
+    if frame then frame.edit:SetText(self:BuildReport()) end
 end
 
 local function BuildUI()
     frame = UI.CreatePanel({
         name = "OppositeQOLWhoPulledFrame", width = 560, height = 470,
-        title = "OppositeQOL", subtitle = "Who Pulled", posKey = "whoPulled",
+        title = "OppositeQOL", subtitle = "PrePull", posKey = "whoPulled",
     })
 
     -- Settings strip.
@@ -612,25 +386,15 @@ local function BuildUI()
     previewBtn:SetPoint("LEFT", soundDD, "RIGHT", 6, 0)
     previewBtn:SetScript("OnClick", function() M:PlaySoundByName(M.soundName) end)
 
-    local _, chatLabel = settingToggle(-70, "Announce puller in chat", "chatAnnounce")
-
-    local CYCLE = { "AUTO", "SAY", "YELL" }
-    local chanBtn = UI.CreateFlatButton(frame, M.chatChannel or "AUTO", 60, 18, theme.accent)
-    chanBtn:SetPoint("LEFT", chatLabel, "RIGHT", 10, 0)
-    chanBtn:SetScript("OnClick", function(self)
-        local idx = 1
-        for i, v in ipairs(CYCLE) do if v == (M.chatChannel or "AUTO") then idx = i break end end
-        local nxt = CYCLE[(idx % #CYCLE) + 1]
-        M.chatChannel, ns.db.whoPulled.chatChannel = nxt, nxt
-        self:SetLabel(nxt)
-    end)
-
     local hint = frame:CreateFontString(nil, "OVERLAY")
     StyleFont(hint, 11, theme.textDim)
-    hint:SetPoint("TOPLEFT", 16, -92)
-    hint:SetText("Midnight blocks addon chat mid-pull, so it posts when the group leaves combat.")
+    hint:SetPoint("TOPLEFT", 16, -78)
+    hint:SetPoint("TOPRIGHT", -16, -78)
+    hint:SetJustifyH("LEFT")
+    hint:SetText("When each boss was pulled and how early/late vs the timer. For *who* "
+        .. "pulled (incl. totem/pet pulls), run the companion log tool - see the README.")
 
-    -- Copyable leaderboard text.
+    -- Copyable timing log.
     local box = CreateFrame("Frame", nil, frame, "BackdropTemplate")
     box:SetPoint("TOPLEFT", 16, -114)
     box:SetPoint("TOPRIGHT", -16, -114)
@@ -696,8 +460,7 @@ local EVENTS = {
     "CHAT_MSG_ADDON", "START_TIMER", "STOP_TIMER_OF_TYPE",
     "START_PLAYER_COUNTDOWN", "CANCEL_PLAYER_COUNTDOWN",
     "PLAYER_ENTERING_WORLD", "GROUP_ROSTER_UPDATE", "UPDATE_INSTANCE_INFO",
-    "ENCOUNTER_START", "ENCOUNTER_END", "DAMAGE_METER_COMBAT_SESSION_UPDATED",
-    "PLAYER_REGEN_ENABLED",
+    "ENCOUNTER_START", "ENCOUNTER_END",
 }
 
 function M:OnEnable()

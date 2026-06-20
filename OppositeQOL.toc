@@ -1,6 +1,6 @@
 ## Interface: 120007
 ## Title: OppositeQOL
-## Notes: Quality-of-life tools for raid leaders.|nModule 1: Invite Helper.|nModule 2: Who Pulled.|nModule 3: Combat Log Status.
+## Notes: Quality-of-life tools for raid leaders.|nModule 1: Invite Helper.|nModule 2: PrePull.|nModule 3: Combat Log Status.
 ## Author: Michael
 ## X-Website: https://github.com/Bruckii18/OppositeQOL
 ## Version: @project-version@

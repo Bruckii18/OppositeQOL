@@ -1,7 +1,7 @@
 -- OppositeQOL - Minimap button
 -- A small, dependency-free button on the minimap edge (no LibDBIcon/LibDataBroker
 -- needed, keeping the addon self-contained). Left-click opens the module list,
--- right-click opens Who Pulled, drag moves it around the edge. The position
+-- right-click opens PrePull, drag moves it around the edge. The position
 -- (angle) and visibility persist in ns.db.minimap.
 --
 -- The logo is the bundled Media\Opposite_HB_Discord_128x128.tga, shared via
@@ -84,7 +84,7 @@ function MB:Create()
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
         GameTooltip:AddLine("OppositeQOL")
         GameTooltip:AddLine("|cffffffffLeft-click|r  open the module list")
-        GameTooltip:AddLine("|cffffffffRight-click|r  open Who Pulled")
+        GameTooltip:AddLine("|cffffffffRight-click|r  open PrePull")
         GameTooltip:AddLine("|cff999999Drag|r  move around the minimap")
         if ns.CombatLog and ns:IsModuleEnabled("combatLog") then
             GameTooltip:AddLine(" ")

@@ -1,7 +1,8 @@
--- Standalone logic test for the Who Pulled module. Stubs the WoW API, loads the
--- real addon files into one shared namespace, runs init, and verifies the
--- timing classification, tank exemption, puller resolution from boss target,
--- the session/leaderboard history, and the module on/off framework.
+-- Standalone logic test for the PrePull module (internal key/file: whoPulled
+-- / WhoPulled.lua). Stubs the WoW API, loads the real addon files into one shared
+-- namespace, runs init, and verifies the pull-timer capture + early/late
+-- classification, the timing-only banner (no puller name), the recorded log and
+-- the merge keys for the companion tool, and the module on/off framework.
 -- Run from the project root:  luajit tests/test_whopulled.lua
 
 -- ---- per-object widget mock (each frame/fontstring has its own storage) ----
@@ -75,20 +76,12 @@ InCombatLockdown = function() return inCombat end
 LE_PARTY_CATEGORY_INSTANCE = 2
 TIMER_TYPE_PLAYER_COUNTDOWN = 3
 
--- boss target: a controllable fixture. nil name => no boss target this pull.
-local bossTarget = nil
-UnitExists = function(unit) return unit == "boss1target" and bossTarget ~= nil end
-UnitIsPlayer = function(unit) return unit == "boss1target" and bossTarget ~= nil end
-UnitName = function(unit)
-    if unit == "player" then return "Me", "" end
-    if unit == "boss1target" and bossTarget then return bossTarget.name, bossTarget.realm end
-    return nil
-end
+-- minimal unit stubs (still needed by other modules loaded alongside)
+UnitExists = function() return false end
+UnitIsPlayer = function() return false end
+UnitName = function(unit) if unit == "player" then return "Me", "" end end
 GetUnitName = function(unit) return (UnitName(unit)) end
-UnitClass = function(unit)
-    if unit == "boss1target" and bossTarget then return bossTarget.class, bossTarget.class end
-    return nil
-end
+UnitClass = function() return nil end
 
 -- announce sink: RaidWarningFrame nil => Announce falls back to ns:Print
 RaidWarningFrame, RaidNotice_AddMessage, ChatTypeInfo = nil, nil, nil
@@ -109,7 +102,7 @@ LibStub = function(name)
     end
 end
 
--- run C_Timer.After synchronously so the poll chain resolves in-line
+-- run C_Timer.After synchronously (a couple of modules schedule with it)
 C_Timer = { After = function(_, fn) fn() end }
 
 -- chat capture for PostReport
@@ -150,10 +143,11 @@ local EP = ns.WhoPulled
 
 -- ---- module framework ----
 check("module registered", ns.modules.whoPulled ~= nil)
+check("display name is PrePull", EP.name == "PrePull")
 check("enabled by default", EP.enabled == true)
 check("default persisted to DB", OppositeQOLDB.modules.whoPulled.enabled == true)
-check("config defaults applied (sound + chat opt-in)",
-    EP.onTimeWindow == 0.25 and EP.sound == false and EP.chatAnnounce == false)
+check("config defaults applied", EP.onTimeWindow == 0.25 and EP.sound == false)
+check("chat call-out config dropped", EP.chatAnnounce == nil and ns.db.whoPulled.chatAnnounce == nil)
 check("sessions table created", type(EP.db.sessions) == "table")
 
 -- ---- sound picker: built-ins (SOUNDKIT) + LibSharedMedia merge ----
@@ -161,7 +155,6 @@ check("soundName default is Raid Warning", EP.soundName == "Raid Warning")
 local sl = EP:SoundList()
 local function hasSound(n) for _, e in ipairs(sl) do if e.name == n then return true end end end
 check("sound list has built-in Raid Warning", hasSound("Raid Warning"))
-check("sound list has built-in Ready Check", hasSound("Ready Check"))
 check("sound list merges LibSharedMedia sounds", hasSound("AddonX: Bibble"))
 soundsPlayed = {}
 EP:PlaySoundByName("Raid Warning")
@@ -171,87 +164,67 @@ EP:PlaySoundByName("AddonX: Bibble")
 check("LSM sound plays via PlaySoundFile", contains(soundsPlayed[1] or "", "bibble.ogg"))
 
 -- ---- timing classification ----
-local k1 = EP:Classify(nil);   check("untimed kind", k1 == "untimed")
-local k2, d2 = EP:Classify(-1); check("early kind",   k2 == "early" and contains(d2, "1.00 seconds early"))
-local k3 = EP:Classify(0.1);   check("on-time kind (inside window)", k3 == "ontime")
-local k4, d4 = EP:Classify(2);  check("late kind",    k4 == "late" and contains(d4, "2.00 seconds late"))
+local k1 = EP:Classify(nil);    check("untimed kind", k1 == "untimed")
+local k2, d2 = EP:Classify(-1);  check("early kind", k2 == "early" and contains(d2, "1.00 seconds early"))
+local k3 = EP:Classify(0.1);    check("on-time kind (inside window)", k3 == "ontime")
+local k4, d4 = EP:Classify(2);   check("late kind", k4 == "late" and contains(d4, "2.00 seconds late"))
 
--- ---- tank exemption in the message ----
-local earlyCtx = { pullTimeDiff = -2, desc = "Boss pulled 2.00 seconds early", kind = "early" }
-local tankMsg = EP:BuildMessage(earlyCtx, { name = "Tankzor", isTank = true })
-local dpsMsg  = EP:BuildMessage(earlyCtx, { name = "Dpsy", isTank = false })
-check("tank early pull drops the early flag", tankMsg == "Boss pulled by Tankzor.")
-check("dps early pull keeps the early flag", contains(dpsMsg, "2.00 seconds early") and contains(dpsMsg, "Dpsy"))
-check("nil actor -> [Unknown]", contains(EP:BuildMessage(earlyCtx, nil), "[Unknown]"))
-
--- ---- end-to-end: countdown then a 0.5s-early pull, boss target = tank ----
-bossTarget = { name = "Tankzor", realm = "TarrenMill", class = nil }
+-- ---- end-to-end: countdown then a 0.5s-early pull (timing-only banner) ----
 EP:START_TIMER(TIMER_TYPE_PLAYER_COUNTDOWN, 5)  -- expected pull at clock+5
 advance(4.5)                                    -- pull 0.5s early
 prints = {}
 EP:ENCOUNTER_START(111, "Test Boss")
-check("pull recorded immediately from boss target", EP.pullContext.recorded == true)
+check("pull recorded", EP.pullContext and EP.pullContext.recorded == true)
 check("classified early", EP.pullContext.kind == "early")
-check("tank banner has no early flag", lastPrint() == "Boss pulled by Tankzor-TarrenMill.")
+check("banner shows timing only, no puller name",
+    lastPrint() == "Boss pulled 0.50 seconds early." and not contains(lastPrint(), " by "))
+
+-- a phase re-fire of the same ENCOUNTER_START is ignored (no duplicate record)
+local n1 = #EP.db.sessions[#EP.db.sessions].pulls
+EP:ENCOUNTER_START(111, "Test Boss")
+check("duplicate ENCOUNTER_START ignored", #EP.db.sessions[#EP.db.sessions].pulls == n1)
 EP:ENCOUNTER_END()
 check("context cleared on encounter end", EP.pullContext == nil)
 
--- ---- end-to-end: no countdown, no boss target -> [Unknown] after polls ----
-bossTarget = nil
+-- ---- untimed pull (no timer) still records + plain banner ----
 prints = {}
 EP:ENCOUNTER_START(222, "Untimed Boss")
-check("untimed + unknown puller still records", EP.pullContext.recorded == true)
-check("untimed banner names [Unknown]", contains(lastPrint(), "[Unknown]") and not contains(lastPrint(), "seconds"))
+check("untimed pull records", EP.pullContext.recorded == true)
+check("untimed banner is plain 'Boss pulled.'",
+    lastPrint() == "Boss pulled." and not contains(lastPrint(), "seconds"))
 EP:ENCOUNTER_END()
 
--- ---- history + leaderboard (tank hidden, non-tanks aggregated) ----
-EP:RecordPull({ encounterName = "Boss A", pullTimeDiff = -1.5 }, { name = "Dpsy-TarrenMill", isTank = false })
-EP:RecordPull({ encounterName = "Boss A", pullTimeDiff = 2.0 },  { name = "Dpsy-TarrenMill", isTank = false })
-local board = EP:BuildLeaderboard()
-check("leaderboard hides tank pulls", contains(board, "tank pulls hidden"))
-check("leaderboard aggregates the dps puller", contains(board, "Dpsy-TarrenMill") and contains(board, "1 early") and contains(board, "1 late"))
+-- ---- recorded log: timing only, no puller fields; merge keys present ----
+EP:RecordPull({ encounterID = 3183, encounterName = "L'ura", pullTimeDiff = -2.34 })
+local sess = EP.db.sessions[#EP.db.sessions]
+local rec  = sess.pulls[#sess.pulls]
+check("record carries encounterID for the log join", rec.encounterID == 3183)
+check("record carries a local wall-clock stamp", type(rec.localTime) == "string"
+    and rec.localTime:match("^%d%d%d%d%-%d%d%-%d%d %d%d:%d%d:%d%d$") ~= nil)
+check("record carries the timing", rec.pullTimeDiff == -2.34)
+check("record has NO puller fields", rec.pullerName == nil and rec.pullerIsTank == nil)
 
--- ---- merge keys for the companion log parser (encounterID + local time) ----
-EP:RecordPull({ encounterID = 3183, encounterName = "L'ura", pullTimeDiff = -2.34 },
-    { name = "Torm-Drakthul", isTank = false })
-local mergeSess = EP.db.sessions[#EP.db.sessions]
-local mergeRec  = mergeSess.pulls[#mergeSess.pulls]
-check("pull record carries encounterID for the log join", mergeRec.encounterID == 3183)
-check("pull record carries a local wall-clock stamp", type(mergeRec.localTime) == "string"
-    and mergeRec.localTime:match("^%d%d%d%d%-%d%d%-%d%d %d%d:%d%d:%d%d$") ~= nil)
+-- ---- BuildReport: per-pull timing history (no names) ----
+local report = EP:BuildReport()
+check("report titled PrePull", contains(report, "PrePull"))
+check("report lists the boss and its timing",
+    contains(report, "L'ura") and contains(report, "2.34s early"))
 
--- ---- report posts the leaderboard to chat (out of combat) ----
+-- ---- report posts the timing log to chat (out of combat) ----
 sentLines = {}
 EP:PostReport("RAID")
-check("report posted lines to chat", #sentLines > 0)
+check("report posted lines to chat", #sentLines > 0 and contains(sentLines[1], "PrePull"))
+
+-- ---- non-raid ENCOUNTER_START is ignored ----
+local savedIsInInstance = IsInInstance
+IsInInstance = function() return true, "party" end
+EP.pullContext = nil
+EP:ENCOUNTER_START(999, "Dungeon Boss")
+check("non-raid pull is ignored", EP.pullContext == nil)
+IsInInstance = savedIsInInstance
 
 -- ---- report window builds + refreshes without error (while enabled) ----
 check("report window builds", pcall(function() EP:Open() end))
-
--- ---- chat call-out: prepull (early) only, deferred to combat end ----
-EP.chatAnnounce, EP.chatChannel = true, "AUTO"
-
--- a late pull must NOT trigger the chat call-out
-inCombat, sentLines, EP.chatQueue = true, {}, nil
-EP:FirePull({ pullTimeDiff = 1.5, desc = "Boss pulled 1.50 seconds late", kind = "late" },
-    { name = "Slowpoke", isTank = false })
-check("late pull does not queue a chat call-out", EP.chatQueue == nil)
-
--- an early pull queues during combat, even for a boss-target (isTank) puller
-inCombat, sentLines = true, {}
-EP:FirePull({ pullTimeDiff = -1, desc = "Boss pulled 1.00 seconds early", kind = "early" },
-    { name = "Prepuller-TarrenMill", isTank = true })
-check("early pull queued during combat (not sent live)",
-    #sentLines == 0 and EP.chatQueue ~= nil and #EP.chatQueue == 1)
-
-inCombat = false
-EP:PLAYER_REGEN_ENABLED()
-check("chat call-out flushed when combat ends", #sentLines == 1)
-check("uses the prepull format, names the culprit (no tank exemption)",
-    contains(sentLines[1], "Prepulled the boss by 1.00sec")
-    and contains(sentLines[1], "Who prepulled? Prepuller-TarrenMill"))
-check("queue cleared after flush", EP.chatQueue == nil)
-EP.chatAnnounce = false
 
 -- ---- minimap button: builds + toggles without error ----
 check("minimap button creates", pcall(function() ns.MinimapButton:Create() end))
@@ -268,7 +241,7 @@ prints = {}
 local okGuard = pcall(function() EP:Toggle() end)
 check("toggle while disabled is safe", okGuard)
 check("toggle while disabled warns", contains(lastPrint(), "disabled"))
-SlashCmdList["OPPOSITEQOL"]("enable Who Pulled")
+SlashCmdList["OPPOSITEQOL"]("enable PrePull")
 check("enabled via slash (by display name)", EP.enabled == true)
 
 print(ok and "\nALL TESTS PASSED" or "\nSOME TESTS FAILED")

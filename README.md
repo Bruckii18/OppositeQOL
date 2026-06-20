@@ -10,15 +10,13 @@ party: it highlights who's *missing* and who's *not on the list*, then lets you
 invite or remove them in one click. **Needs input:** paste your list of expected
 players.
 
-**Who Pulled** — Calls out *who* pulled the boss and *how early or late* it was
-versus the DBM/BigWigs pull timer, and keeps a per-night leaderboard you can post
-to chat (`/oqol pull`). Raid encounters only; tanks are exempt. **Optional
-input:** in the report window you can turn on an alarm sound and/or a chat
-call-out for prepulls (both off by default). In Midnight (12.0) the game no
-longer lets addons read combat events live, so the *who* is a best-effort guess
-(boss target, then damage meter) — for the exact prepuller, including totem / pet
-/ trap pulls, pair it with the [companion tool](#companion-tool--prepull-report)
-below.
+**PrePull** — Calls out *how early or late* each boss was pulled versus the
+DBM/BigWigs (or Blizzard) pull timer, with a local banner, an optional alarm, and
+a per-night timing log you can post to chat (`/oqol pull`). Raid encounters only.
+It deliberately does **not** try to name *who* pulled — in Midnight (12.0) addons
+can no longer read combat events live, so that could only ever be a wrong guess.
+For the actual puller, including totem / pet / trap / DoT pulls, use the
+[companion tool](#companion-tool--prepull-report) below.
 
 **Combat Log Status** — Shows whether combat logging is currently on, so you know
 your pull is being recorded: a green (on) / red (off) dot on the minimap button,
@@ -34,14 +32,14 @@ per account. Toggle them in `/oqol`; disabling one stops it immediately.
 - `/oqol list` — print modules and their state
 - `/oqol enable <module>` / `/oqol disable <module>`
 - `/invitehelper` (or `/oqol invite`) — open Invite Helper
-- `/oqol pull` (or `/oqol wp`) — open the Who Pulled report
+- `/oqol pull` (or `/oqol wp`) — open the PrePull report
 - `/oqol log` (or `/oqol cl`) — report whether combat logging is active
 - `/oqol minimap` — show/hide the minimap button
 
 ## Minimap button
 
 A minimap button (its own bundled logo) gives one-click access: **left-click**
-opens the module list, **right-click** opens the Who Pulled report, and **drag**
+opens the module list, **right-click** opens the PrePull report, and **drag**
 moves it around the minimap edge. A status dot in its corner shows whether combat
 logging is active (green) or not (red). Its position and visibility are saved;
 hide it with `/oqol minimap`.
