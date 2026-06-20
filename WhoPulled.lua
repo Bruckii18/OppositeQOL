@@ -360,6 +360,14 @@ function M:RecordPull(ctx, actor)
     if not (self.db and ctx) then return end
     local record = {
         ts            = (GetServerTime and GetServerTime()) or time(),
+        -- Local wall-clock stamp in the same shape WoWCombatLog.txt uses, so the
+        -- companion log parser (tools/prepull_report.py) can line each recorded
+        -- pull up with its ENCOUNTER_START line and graft the real puller (incl.
+        -- totem/pet prepulls, which the in-game resolvers can't see) onto our
+        -- timing. encounterID is the primary join key; the timestamp disambiguates
+        -- repeated pulls of the same boss.
+        localTime     = date and date("%Y-%m-%d %H:%M:%S") or nil,
+        encounterID   = ctx.encounterID,
         encounterName = tostring(ctx.encounterName or "?"),
         pullTimeDiff  = ctx.pullTimeDiff,
         pullerName    = actor and safeStr(actor.name) or nil,

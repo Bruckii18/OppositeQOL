@@ -9,6 +9,7 @@ enable-nolib-creation: no
 ignore:
   - README.md
   - tests
+  - tools           # companion log parser (runs on your PC, not in-game)
   - .github
   - .gitignore
   - .gitattributes

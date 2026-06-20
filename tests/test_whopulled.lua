@@ -49,6 +49,7 @@ YES, NO = "Yes", "No"
 format = string.format
 abs = math.abs
 time = os.time
+date = os.date
 GetTime = function() return clock end
 strsplit = function(sep, s)
     local out = {}
@@ -209,6 +210,15 @@ EP:RecordPull({ encounterName = "Boss A", pullTimeDiff = 2.0 },  { name = "Dpsy-
 local board = EP:BuildLeaderboard()
 check("leaderboard hides tank pulls", contains(board, "tank pulls hidden"))
 check("leaderboard aggregates the dps puller", contains(board, "Dpsy-TarrenMill") and contains(board, "1 early") and contains(board, "1 late"))
+
+-- ---- merge keys for the companion log parser (encounterID + local time) ----
+EP:RecordPull({ encounterID = 3183, encounterName = "L'ura", pullTimeDiff = -2.34 },
+    { name = "Torm-Drakthul", isTank = false })
+local mergeSess = EP.db.sessions[#EP.db.sessions]
+local mergeRec  = mergeSess.pulls[#mergeSess.pulls]
+check("pull record carries encounterID for the log join", mergeRec.encounterID == 3183)
+check("pull record carries a local wall-clock stamp", type(mergeRec.localTime) == "string"
+    and mergeRec.localTime:match("^%d%d%d%d%-%d%d%-%d%d %d%d:%d%d:%d%d$") ~= nil)
 
 -- ---- report posts the leaderboard to chat (out of combat) ----
 sentLines = {}

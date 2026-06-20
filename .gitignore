@@ -10,6 +10,10 @@
 # Lua
 *.luac
 
+# Python (companion tool in tools/)
+__pycache__/
+*.pyc
+
 # BigWigs packager output
 .release/
 .install/

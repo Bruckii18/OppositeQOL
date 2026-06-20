@@ -14,7 +14,11 @@ players.
 versus the DBM/BigWigs pull timer, and keeps a per-night leaderboard you can post
 to chat (`/oqol pull`). Raid encounters only; tanks are exempt. **Optional
 input:** in the report window you can turn on an alarm sound and/or a chat
-call-out for prepulls (both off by default).
+call-out for prepulls (both off by default). In Midnight (12.0) the game no
+longer lets addons read combat events live, so the *who* is a best-effort guess
+(boss target, then damage meter) — for the exact prepuller, including totem / pet
+/ trap pulls, pair it with the [companion tool](#companion-tool--prepull-report)
+below.
 
 **Combat Log Status** — Shows whether combat logging is currently on, so you know
 your pull is being recorded: a green (on) / red (off) dot on the minimap button,
@@ -42,6 +46,54 @@ moves it around the minimap edge. A status dot in its corner shows whether comba
 logging is active (green) or not (red). Its position and visibility are saved;
 hide it with `/oqol minimap`.
 
+## Companion tool — Prepull report
+
+Since Midnight (12.0), addons can no longer read the combat log live, so the
+in-game **Who Pulled** module can't always name the real prepuller — a pull set
+off by a totem, pet, trap or DoT shows up as a wrong or `[Unknown]` actor. The
+combat log *file* (`WoWCombatLog.txt`, written while logging is on) still records
+all of it, so a small offline script can recover the truth after the session.
+
+`tools/prepull_report.py` reads that file and, for every `ENCOUNTER_START`, tells
+you **who** pulled, **when**, and **which ability** did it — chaining totem / pet
+GUIDs back to their owner via `SPELL_SUMMON`. With `--sv` it also merges the timing
+OppositeQOL saved, adding how early or late each pull was.
+
+```sh
+# every pull in the log
+python3 tools/prepull_report.py "World of Warcraft/_retail_/Logs/WoWCombatLog.txt"
+
+# just the most recent pull (e.g. the attempt you just wiped on)
+python3 tools/prepull_report.py "World of Warcraft/_retail_/Logs/WoWCombatLog.txt" --last
+```
+
+```
+OppositeQOL · Prepull report
+WoWCombatLog.txt  ·  2 pull(s)
+
+  2026-06-17 22:14:32  ·  L'ura
+      pulled by Torm-Drak'thul-EU using Earthbind (Earthbind Totem)  (2.34s EARLY)
+      addon saw [Unknown ROGUE]  (in-game guess, now corrected)
+
+  2026-06-17 22:31:05  ·  Belo'ren
+      pulled by Tankzor-Drak'thul-EU using Melee
+
+  Prepull leaderboard
+   1. Torm-Drak'thul-EU  ×1
+   2. Tankzor-Drak'thul-EU  ×1
+```
+
+It only *reads* the log and prints to the console — nothing is written back into
+the game, so you can run it anytime, even mid-raid with WoW open. `--last` shows
+just the most recent pull; add `--sv <OppositeQOL.lua>` for the early/late timing
+(and the "addon saw" correction); `--json` emits machine-readable output;
+`--window` sets how many seconds before the pull to scan (default 10); `--gap`
+sets the largest pause (default 3s) still treated as one pull, so an isolated early
+debuff — e.g. a Hunter's Mark applied 12s before nothing happens — isn't mistaken
+for the puller. Output is colorized on a terminal (disable with `NO_COLOR=1`).
+Pure Python 3.9+, no dependencies. Keep an auto-logger (or `/combatlog`) on during
+the raid; the **Combat Log Status** dot tells you at a glance whether it is.
+
 ## Installation
 
 **Addon manager (recommended):** install from this repo's
@@ -68,4 +120,5 @@ Standalone logic tests (no game required):
 luajit tests/test_invitehelper.lua
 luajit tests/test_whopulled.lua
 luajit tests/test_combatlog.lua
+python3 tools/test_prepull_report.py   # companion log parser
 ```
