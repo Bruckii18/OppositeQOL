@@ -776,6 +776,25 @@ function M:CreateSpellRow(parent)
     icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
     row.icon = icon
 
+    -- Hover the icon to see the full spell tooltip (textures take no mouse input,
+    -- so a transparent button over the icon does the hovering). Reads row._id at
+    -- hover time so it follows the row's current spell as the pool is rebound.
+    local iconHover = CreateFrame("Button", nil, row)
+    iconHover:SetAllPoints(icon)
+    iconHover:SetScript("OnEnter", function(self)
+        local id = row._id
+        if not id then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        if GameTooltip.SetSpellByID then
+            pcall(GameTooltip.SetSpellByID, GameTooltip, id)
+        else
+            GameTooltip:SetText(M:SpellName(id))
+        end
+        GameTooltip:Show()
+    end)
+    iconHover:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    row.iconHover = iconHover
+
     local nameFS = row:CreateFontString(nil, "OVERLAY")
     StyleFont(nameFS, 12, theme.text)
     nameFS:SetPoint("LEFT", icon, "RIGHT", 8, 0)

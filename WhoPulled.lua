@@ -391,11 +391,13 @@ function M:BuildOptions(parent)
     hint:SetText("When each boss was pulled and how early/late vs the timer. For *who* "
         .. "pulled (incl. totem/pet pulls), run the companion log tool - see the README.")
 
-    -- Copyable timing log.
+    -- Copyable timing log. Fills the pane between the hint and the button row
+    -- (the bulk buttons sit 16px up, are 24px tall; leave an 8px gutter -> 48).
     local box = CreateFrame("Frame", nil, frame, "BackdropTemplate")
     box:SetPoint("TOPLEFT", 16, -114)
     box:SetPoint("TOPRIGHT", -16, -114)
-    box:SetHeight(278)
+    box:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 16, 48)
+    box:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -16, 48)
     UI.ApplyBackdrop(box, theme.bgInput, theme.borderHi)
 
     local scroll = CreateFrame("ScrollFrame", nil, box)
@@ -407,10 +409,15 @@ function M:BuildOptions(parent)
     edit:SetMultiLine(true)
     edit:SetAutoFocus(false)
     StyleFont(edit, 13, theme.text)
-    edit:SetWidth(520)
+    edit:SetWidth(400)   -- conservative start; snapped to the viewport below
     edit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     scroll:SetScrollChild(edit)
     frame.edit = edit
+    -- Match the edit box width to the visible scroll area so report lines wrap
+    -- inside the box instead of overflowing the right edge.
+    scroll:SetScript("OnSizeChanged", function(self, w)
+        if w and w > 0 then edit:SetWidth(w) end
+    end)
     scroll:SetScript("OnMouseWheel", function(self, delta)
         local maxScroll = math.max(0, edit:GetHeight() - self:GetHeight())
         self:SetVerticalScroll(math.min(maxScroll, math.max(0, self:GetVerticalScroll() - delta * 24)))

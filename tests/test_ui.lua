@@ -142,6 +142,16 @@ check("CreateScrollArea returns scroll+child", (function()
     return s ~= nil and c ~= nil and type(s.UpdateScrollBar) == "function"
 end)())
 
+-- The child starts at width 1; once the viewport has a real width the updater
+-- must sync the child to it, or content anchored to the child's right edge (the
+-- Externals spell rows) collapses to zero width and is clipped.
+check("CreateScrollArea syncs child width to the viewport", (function()
+    local s, c = UI.CreateScrollArea(newWidget(), 30, 10)
+    s:SetWidth(321)            -- the laid-out viewport width
+    s.UpdateScrollBar()        -- same path OnSizeChanged drives in game
+    return c:GetWidth() == 321
+end)())
+
 -- ---- card primitive constructs (titled + untitled) ----
 check("CreateCard with title constructs", UI.CreateCard(newWidget(), "Section") ~= nil)
 check("CreateCard without title constructs", UI.CreateCard(newWidget()) ~= nil)

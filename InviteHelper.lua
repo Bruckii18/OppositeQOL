@@ -361,10 +361,17 @@ function IH:BuildOptions(parent)
     editBox:SetAutoFocus(false)
     StyleFont(editBox, 13, theme.text)
     editBox:SetTextInsets(2, 2, 2, 2)
-    editBox:SetWidth(540)
+    editBox:SetWidth(400)   -- conservative start; snapped to the viewport below
     editBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     inputScroll:SetScrollChild(editBox)
     frame.editBox = editBox
+
+    -- Keep the edit box exactly as wide as the visible scroll area so pasted text
+    -- WRAPS inside the box instead of running off the right edge. Fires once the
+    -- pane is laid out, and again if the window is ever resized.
+    inputScroll:SetScript("OnSizeChanged", function(self, w)
+        if w and w > 0 then editBox:SetWidth(w) end
+    end)
 
     inputScroll:SetScript("OnMouseWheel", function(self, delta)
         local eb = self:GetScrollChild()
@@ -373,12 +380,17 @@ function IH:BuildOptions(parent)
     end)
     inputBox:SetScript("OnMouseDown", function() editBox:SetFocus() end)
 
+    -- Layout: a small left/right inset and a centre gutter, so the two columns
+    -- below split the pane into equal halves that fill it and never overflow.
+    local PAD, COL_GAP = 16, 14
+    local BTN_Y, BTN_H = -122, 22   -- the Compare/Clear row
+
     -- Compare / Clear + status line.
-    local compareBtn = CreateFlatButton(frame, "Compare", 90, 22, theme.accent)
-    compareBtn:SetPoint("TOPLEFT", 16, -122)
+    local compareBtn = CreateFlatButton(frame, "Compare", 90, BTN_H, theme.accent)
+    compareBtn:SetPoint("TOPLEFT", PAD, BTN_Y)
     compareBtn:SetScript("OnClick", function() IH:RunCompare() end)
 
-    local clearBtn = CreateFlatButton(frame, "Clear", 60, 22, theme.textDim)
+    local clearBtn = CreateFlatButton(frame, "Clear", 60, BTN_H, theme.textDim)
     clearBtn:SetPoint("LEFT", compareBtn, "RIGHT", 6, 0)
     clearBtn:SetScript("OnClick", function()
         editBox:SetText("")
@@ -386,40 +398,43 @@ function IH:BuildOptions(parent)
         IH:RenderResult(nil)
     end)
 
+    -- Right-justified status bound between the Clear button and the pane's right
+    -- edge (both anchors share the button row's centre line), so it shrinks to
+    -- fit and can never run past the window.
     local status = frame:CreateFontString(nil, "OVERLAY")
     StyleFont(status, 12, theme.textDim)
     status:SetPoint("LEFT", clearBtn, "RIGHT", 12, 0)
-    status:SetWidth(380)
+    status:SetPoint("RIGHT", frame, "TOPRIGHT", -PAD, BTN_Y - BTN_H / 2)
     status:SetJustifyH("RIGHT")
     frame.status = status
 
-    -- Column headers.
+    -- Column headers (left column from the left inset; right column from centre).
     local missingHeader = frame:CreateFontString(nil, "OVERLAY")
     StyleFont(missingHeader, 13, theme.green)
-    missingHeader:SetPoint("TOPLEFT", 16, -156)
+    missingHeader:SetPoint("TOPLEFT", PAD, -156)
     frame.missingHeader = missingHeader
 
     local extraHeader = frame:CreateFontString(nil, "OVERLAY")
     StyleFont(extraHeader, 13, theme.red)
-    extraHeader:SetPoint("TOPLEFT", 297, -156)
+    extraHeader:SetPoint("TOPLEFT", frame, "TOP", COL_GAP / 2, -156)
     frame.extraHeader = extraHeader
 
-    -- Two list columns.
-    local colW, colH = 267, 298
-    IH.missingLV = CreateListView(frame, colW, colH, "invite")
-    IH.missingLV.container:SetPoint("TOPLEFT", 16, -174)
+    -- Two list columns + their bulk-action buttons. The buttons pin to the bottom
+    -- of the pane (split at the centre); each list then fills the space between
+    -- its header and its button. All anchoring is relative to the pane edges and
+    -- its horizontal centre, so the layout scales with the window and never spills.
+    IH.missingLV = CreateListView(frame, 100, 100, "invite")
+    IH.extraLV   = CreateListView(frame, 100, 100, "remove")
 
-    IH.extraLV = CreateListView(frame, colW, colH, "remove")
-    IH.extraLV.container:SetPoint("TOPLEFT", 297, -174)
-
-    -- Bulk action buttons.
-    local inviteAllBtn = CreateFlatButton(frame, "Invite Missing", colW, 24, theme.green)
-    inviteAllBtn:SetPoint("TOPLEFT", 16, -478)
+    local inviteAllBtn = CreateFlatButton(frame, "Invite Missing", 100, 24, theme.green)
+    inviteAllBtn:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", PAD, 2)
+    inviteAllBtn:SetPoint("BOTTOMRIGHT", frame, "BOTTOM", -COL_GAP / 2, 2)
     inviteAllBtn:SetScript("OnClick", function() IH:InviteMissing() end)
     frame.inviteAllBtn = inviteAllBtn
 
-    local removeAllBtn = CreateFlatButton(frame, "Remove Not-On-List", colW, 24, theme.red)
-    removeAllBtn:SetPoint("TOPLEFT", 297, -478)
+    local removeAllBtn = CreateFlatButton(frame, "Remove Not-On-List", 100, 24, theme.red)
+    removeAllBtn:SetPoint("BOTTOMLEFT", frame, "BOTTOM", COL_GAP / 2, 2)
+    removeAllBtn:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -PAD, 2)
     removeAllBtn:SetScript("OnClick", function()
         local extra = IH.lastResult and IH.lastResult.extra
         if extra and #extra > 0 then
@@ -427,6 +442,14 @@ function IH:BuildOptions(parent)
         end
     end)
     frame.removeAllBtn = removeAllBtn
+
+    IH.missingLV.container:ClearAllPoints()
+    IH.missingLV.container:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, -174)
+    IH.missingLV.container:SetPoint("BOTTOMRIGHT", inviteAllBtn, "TOPRIGHT", 0, 6)
+
+    IH.extraLV.container:ClearAllPoints()
+    IH.extraLV.container:SetPoint("TOPLEFT", frame, "TOP", COL_GAP / 2, -174)
+    IH.extraLV.container:SetPoint("BOTTOMRIGHT", removeAllBtn, "TOPRIGHT", 0, 6)
 
     if ns.db.inviteHelper.lastInput then
         editBox:SetText(ns.db.inviteHelper.lastInput)

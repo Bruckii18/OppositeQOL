@@ -665,6 +665,12 @@ function UI.CreateScrollArea(parent, topInset, bottomInset)
     thumb:SetHeight(30)
 
     local function update()
+        -- Keep the scroll child as wide as the viewport. It is created at width 1
+        -- (before layout the real width is unknown); without this, anything in the
+        -- child anchored to its right edge collapses to zero width and is clipped
+        -- (e.g. the Externals spell-row name + Alert/TTS/remove controls).
+        local w = scroll:GetWidth()
+        if w and w > 1 then child:SetWidth(w) end
         local viewH = scroll:GetHeight() or 1
         local contentH = child:GetHeight() or 1
         local maxScroll = math.max(0, contentH - viewH)

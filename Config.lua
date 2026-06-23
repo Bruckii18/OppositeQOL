@@ -18,7 +18,7 @@ local StyleFont = UI.StyleFont
 local Shell = {}
 ns.Config = Shell
 
-local WIN_W, WIN_H = 720, 580
+local WIN_W, WIN_H = 880, 620
 local SIDEBAR_W    = 188          -- left nav width
 local CONTENT_LEFT = SIDEBAR_W + 12
 local HEADER_Y     = 44           -- below the window's own title bar
