@@ -456,6 +456,16 @@ function M:OnInitialize()
     self.db.sessions = self.db.sessions or {}
 end
 
+-- The profile system refills ns.db.whoPulled in place when the active profile
+-- changes; re-read our cached fields (M[k]) from it and ensure the session log
+-- exists, then refresh the window if it's open.
+function M:OnProfileChanged()
+    self.db = ns.db.whoPulled
+    for k in pairs(DEFAULTS) do self[k] = self.db[k] end
+    self.db.sessions = self.db.sessions or {}
+    if frame and frame:IsShown() then self:RefreshReport() end
+end
+
 local EVENTS = {
     "CHAT_MSG_ADDON", "START_TIMER", "STOP_TIMER_OF_TYPE",
     "START_PLAYER_COUNTDOWN", "CANCEL_PLAYER_COUNTDOWN",

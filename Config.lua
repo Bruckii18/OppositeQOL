@@ -64,6 +64,13 @@ function Config:Build()
     intro:SetPoint("TOPLEFT", 16, -42)
     intro:SetText("Toggle modules on or off. Changes apply immediately.")
 
+    -- Quick access to the settings-profile manager (Profiles.lua).
+    local profilesBtn = UI.CreateFlatButton(f, "Profiles", 70, 18, theme.accent)
+    profilesBtn:SetPoint("TOPRIGHT", -10, -40)
+    profilesBtn:SetScript("OnClick", function()
+        if ns.Profiles then ns.Profiles:Toggle() end
+    end)
+
     self.rows = {}
     self:Populate()
 end

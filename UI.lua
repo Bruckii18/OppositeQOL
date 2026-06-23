@@ -20,12 +20,32 @@ UI.theme = {
     borderHi   = { 0.18, 0.18, 0.20, 1 },    -- subtle inner border on cells
     text       = { 0.86, 0.86, 0.88, 1 },
     textDim    = { 0.46, 0.46, 0.50, 1 },
-    accent     = { 0.20, 0.74, 0.92, 1 },    -- cool cyan accent
-    green      = { 0.40, 0.85, 0.47, 1 },    -- on / invite
-    red        = { 0.92, 0.38, 0.38, 1 },    -- off / remove
+    accent     = { 0x33/255, 0xbc/255, 0xe8/255, 1 },  -- cool cyan accent (#33bce8)
+    green      = { 0x66/255, 0xd9/255, 0x77/255, 1 },  -- on / invite (#66d977)
+    red        = { 0xeb/255, 0x61/255, 0x61/255, 1 },  -- off / remove (#eb6161)
     rowHover   = { 1, 1, 1, 0.05 },
 }
 local theme = UI.theme
+
+-- "ffRRGGBB" colour-escape body from a theme colour table {r,g,b}. The single
+-- source of truth for chat-text colours, so Core/CombatLog never hard-code hexes
+-- that can drift from the theme (e.g. ns:Print(... UI.Hex(theme.accent) ...)).
+function UI.Hex(c)
+    local function b(x) return math.floor((x or 0) * 255 + 0.5) end
+    return string.format("ff%02x%02x%02x", b(c[1]), b(c[2]), b(c[3]))
+end
+
+-- Layout scale shared by the widget factory below. One rhythm everywhere is most
+-- of what reads as "polish": PAD insets content, ROW_H is one control row.
+UI.PAD      = 16    -- left/right content inset
+UI.ROW_H    = 28    -- one control row
+UI.HEADER_H = 24    -- section header
+UI.GAP      = 8     -- spacer between sections
+
+-- State is expressed by mutating ALPHA, never by swapping textures: hover lifts
+-- the border alpha (accent-tinted), disabled dims the whole control. Keeps the
+-- look coherent and a re-theme down to a single `theme.accent` change.
+UI.A = { brdHover = 0.9, disabled = 0.4, rowStripe = 0.04 }
 
 UI.FONT     = "Fonts\\ARIALN.TTF"  -- condensed, clean (ElvUI default vibe)
 UI.BACKDROP = {
@@ -274,11 +294,288 @@ function UI.CreatePanel(opts)
     close:SetPoint("TOPRIGHT", -8, -10)
     close:SetScript("OnClick", function() f:Hide() end)
 
-    local divider = f:CreateTexture(nil, "ARTWORK")
+    local divider = UI.Sharp(f:CreateTexture(nil, "ARTWORK"))
     divider:SetColorTexture(theme.accent[1], theme.accent[2], theme.accent[3], 0.5)
     divider:SetHeight(1)
     divider:SetPoint("TOPLEFT", 14, -34)
     divider:SetPoint("TOPRIGHT", -14, -34)
 
     return f
+end
+
+-- ===========================================================================
+-- Pixel snapping
+-- A cyan hairline that doesn't fall on a physical pixel boundary blurs. Px gives
+-- the size of one physical pixel in a frame's coordinate space; Sharp tells a 1px
+-- texture not to interpolate. (Distilled from ElvUI/EllesmereUI's pixel engine --
+-- no scale-watcher; our windows don't rescale at runtime.)
+-- ===========================================================================
+function UI.Px(frame)
+    local gp = _G.GetPhysicalScreenSize
+    local screenH = (gp and select(2, gp())) or 768
+    local scale = (frame and frame.GetEffectiveScale and frame:GetEffectiveScale()) or 1
+    return (768 / screenH) / scale
+end
+
+function UI.Sharp(tex)
+    if tex.SetSnapToPixelGrid then tex:SetSnapToPixelGrid(false) end
+    if tex.SetTexelSnappingBias then tex:SetTexelSnappingBias(0) end
+    return tex
+end
+
+-- Snap a value to [min,max] on a step grid. Pure arithmetic, exposed for tests.
+function UI.Snap(value, minVal, maxVal, step)
+    if step and step > 0 then value = math.floor((value - minVal) / step + 0.5) * step + minVal end
+    if value < minVal then value = minVal elseif value > maxVal then value = maxVal end
+    return value
+end
+
+-- ===========================================================================
+-- Widget factory
+-- Every constructor takes (parent, ..., y) and returns `frame, rowHeight`, so an
+-- options page assembles on a descending y-cursor (see UI.Page). Controls read
+-- live values through caller-supplied get/set closures (the EllesmereUI contract).
+-- ===========================================================================
+local function rowFrame(parent, y, h)
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetHeight(h)
+    row:SetPoint("TOPLEFT", parent, "TOPLEFT", UI.PAD, y)
+    row:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -UI.PAD, y)
+    return row
+end
+
+-- Subtle alternating stripe so long lists stay readable. SectionHeader resets the
+-- counter so each section stripes from its own top.
+local function stripe(parent, row)
+    parent._oqolStripe = (parent._oqolStripe or 0) + 1
+    if parent._oqolStripe % 2 == 0 then
+        local bg = row:CreateTexture(nil, "BACKGROUND")
+        bg:SetAllPoints()
+        bg:SetColorTexture(1, 1, 1, UI.A.rowStripe)
+        if bg.SetIgnoreParentAlpha then bg:SetIgnoreParentAlpha(true) end
+    end
+end
+
+local function attachTooltip(frame, text)
+    if not text then return end
+    frame:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine(text, theme.text[1], theme.text[2], theme.text[3], true)
+        GameTooltip:Show()
+    end)
+    frame:SetScript("OnLeave", function() GameTooltip:Hide() end)
+end
+
+-- Dim caps label + 1px accent underline. Resets row striping for the section.
+function UI.CreateSectionHeader(parent, text, y)
+    parent._oqolStripe = 0
+    local row = rowFrame(parent, y, UI.HEADER_H)
+
+    local fs = row:CreateFontString(nil, "OVERLAY")
+    StyleFont(fs, 11, theme.textDim)
+    fs:SetPoint("BOTTOMLEFT", 0, 4)
+    fs:SetText((text or ""):upper())
+
+    local line = UI.Sharp(row:CreateTexture(nil, "ARTWORK"))
+    line:SetColorTexture(theme.accent[1], theme.accent[2], theme.accent[3], 0.5)
+    line:SetHeight(1)
+    line:SetPoint("BOTTOMLEFT", 0, 0)
+    line:SetPoint("BOTTOMRIGHT", 0, 0)
+    return row, UI.HEADER_H
+end
+
+-- Labelled checkbox row. get() -> bool, set(bool) on click.
+function UI.CreateCheckRow(parent, label, y, getValue, setValue, tooltip)
+    local row = rowFrame(parent, y, UI.ROW_H)
+    stripe(parent, row)
+
+    local toggle = UI.CreateToggle(row)
+    toggle:SetPoint("LEFT", 2, 0)
+    toggle:SetChecked(getValue and getValue() or false)
+    toggle:SetScript("OnClick", function(self)
+        local on = not self:GetChecked()
+        self:SetChecked(on)
+        if setValue then setValue(on) end
+    end)
+    row.control = toggle
+
+    local fs = row:CreateFontString(nil, "OVERLAY")
+    StyleFont(fs, 12, theme.text)
+    fs:SetPoint("LEFT", toggle, "RIGHT", 8, 0)
+    fs:SetText(label or "")
+    attachTooltip(row, tooltip)
+    return row, UI.ROW_H
+end
+
+-- Labelled slider with an accent fill and a right-hand numeric value.
+function UI.CreateSlider(parent, label, y, minVal, maxVal, step, getValue, setValue, tooltip)
+    local row = rowFrame(parent, y, UI.ROW_H)
+    stripe(parent, row)
+
+    local fs = row:CreateFontString(nil, "OVERLAY")
+    StyleFont(fs, 12, theme.text)
+    fs:SetPoint("LEFT", 2, 0)
+    fs:SetText(label or "")
+
+    local valFS = row:CreateFontString(nil, "OVERLAY")
+    StyleFont(valFS, 12, theme.accent)
+    valFS:SetPoint("RIGHT", -2, 0)
+    valFS:SetJustifyH("RIGHT")
+
+    -- Track + fill occupy the right ~45% of the row.
+    local track = UI.Sharp(row:CreateTexture(nil, "BACKGROUND"))
+    track:SetColorTexture(theme.text[1], theme.text[2], theme.text[3], 0.16)
+    track:SetHeight(2)
+    track:SetPoint("RIGHT", valFS, "LEFT", -10, 0)
+    track:SetWidth(150)
+
+    local fill = UI.Sharp(row:CreateTexture(nil, "BORDER"))
+    fill:SetColorTexture(theme.accent[1], theme.accent[2], theme.accent[3], 0.75)
+    fill:SetHeight(2)
+    fill:SetPoint("LEFT", track, "LEFT", 0, 0)
+
+    local thumb = CreateFrame("Button", nil, row)
+    thumb:SetSize(12, 12)
+    local th = thumb:CreateTexture(nil, "OVERLAY")
+    th:SetAllPoints()
+    th:SetColorTexture(theme.accent[1], theme.accent[2], theme.accent[3], 1)
+
+    local function layout(v)
+        local ratio = (maxVal > minVal) and ((v - minVal) / (maxVal - minVal)) or 0
+        if ratio < 0 then ratio = 0 elseif ratio > 1 then ratio = 1 end
+        local w = track:GetWidth() or 150
+        fill:SetWidth(math.max(1, w * ratio))
+        thumb:ClearAllPoints()
+        thumb:SetPoint("CENTER", track, "LEFT", w * ratio, 0)
+        local dec = (step and step < 1) and 2 or 0
+        valFS:SetText(string.format("%." .. dec .. "f", v))
+    end
+    layout(getValue and getValue() or minVal)
+
+    local function commit()
+        local mx, _ = GetCursorPosition()
+        local scale = track:GetEffectiveScale() or 1
+        local left = track:GetLeft() or 0
+        local w = track:GetWidth() or 150
+        local ratio = w > 0 and (((mx / scale) - left) / w) or 0
+        local v = UI.Snap(minVal + ratio * (maxVal - minVal), minVal, maxVal, step)
+        layout(v)
+        if setValue then setValue(v) end
+    end
+    thumb:RegisterForDrag("LeftButton")
+    thumb:SetScript("OnDragStart", function(self) self:SetScript("OnUpdate", commit) end)
+    thumb:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil); commit() end)
+    row.control, row.SetSliderValue = thumb, layout
+    attachTooltip(row, tooltip)
+    return row, UI.ROW_H
+end
+
+-- Labelled dropdown row. options as for UI.CreateDropdown:SetOptions.
+function UI.CreateDropdownRow(parent, label, y, options, getValue, setValue, tooltip)
+    local row = rowFrame(parent, y, UI.ROW_H)
+    stripe(parent, row)
+
+    local fs = row:CreateFontString(nil, "OVERLAY")
+    StyleFont(fs, 12, theme.text)
+    fs:SetPoint("LEFT", 2, 0)
+    fs:SetText(label or "")
+
+    local dd = UI.CreateDropdown(row, 160, 20)
+    dd:SetPoint("RIGHT", -2, 0)
+    dd:SetOptions(options or {})
+    if getValue then dd:SetValue(getValue()) end
+    dd.OnSelect = function(value) if setValue then setValue(value) end end
+    row.control = dd
+    attachTooltip(row, tooltip)
+    return row, UI.ROW_H
+end
+
+-- Full-width action button row.
+function UI.CreateButtonRow(parent, label, y, onClick, accent)
+    local row = rowFrame(parent, y, UI.ROW_H + 4)
+    local b = UI.CreateFlatButton(row, label, 120, 22, accent or theme.accent)
+    b:SetPoint("LEFT", 2, 0)
+    b:SetScript("OnClick", function() if onClick then onClick() end end)
+    row.control = b
+    return row, UI.ROW_H + 4
+end
+
+function UI.CreateSpacer(parent, y, height)
+    local h = height or UI.GAP
+    local row = rowFrame(parent, y, h)
+    return row, h
+end
+
+-- A builder bound to a parent + a mutable y cursor. Each :Method forwards to the
+-- matching UI.Create* and advances the cursor by the returned row height, so a
+-- page reads top-to-bottom and reorders trivially.
+function UI.Page(parent, startY)
+    local y = startY or -UI.PAD
+    local P = { parent = parent }
+    local function step(_, h) y = y - h end
+    function P:Header(t)                                   step(UI.CreateSectionHeader(parent, t, y)); return self end
+    function P:Check(l, get, set, tip)                     step(UI.CreateCheckRow(parent, l, y, get, set, tip)); return self end
+    function P:Slider(l, mn, mx, st, get, set, tip)        step(UI.CreateSlider(parent, l, y, mn, mx, st, get, set, tip)); return self end
+    function P:Dropdown(l, opts, get, set, tip)            step(UI.CreateDropdownRow(parent, l, y, opts, get, set, tip)); return self end
+    function P:Button(l, fn, accent)                       step(UI.CreateButtonRow(parent, l, y, fn, accent)); return self end
+    function P:Spacer(h)                                   step(UI.CreateSpacer(parent, y, h)); return self end
+    function P:Y() return y end
+    function P:Height() return -y + UI.PAD end
+    return P
+end
+
+-- A clipped, wheel-scrollable region with a thin overlay scrollbar. Returns the
+-- scroll frame and its child; fill the child with UI.Page and set its height.
+function UI.CreateScrollArea(parent, topInset, bottomInset)
+    topInset, bottomInset = topInset or 0, bottomInset or 0
+
+    local scroll = CreateFrame("ScrollFrame", nil, parent)
+    scroll:SetPoint("TOPLEFT", UI.PAD, -topInset)
+    scroll:SetPoint("BOTTOMRIGHT", -UI.PAD, bottomInset)
+    scroll:EnableMouseWheel(true)
+    if scroll.SetClipsChildren then scroll:SetClipsChildren(true) end
+
+    local child = CreateFrame("Frame", nil, scroll)
+    child:SetWidth(1)
+    child:SetHeight(1)
+    scroll:SetScrollChild(child)
+
+    -- Thin overlay track + draggable thumb on the right edge.
+    local track = scroll:CreateTexture(nil, "OVERLAY")
+    track:SetColorTexture(theme.text[1], theme.text[2], theme.text[3], 0.02)
+    track:SetWidth(4)
+    track:SetPoint("TOPRIGHT", scroll, "TOPRIGHT", UI.PAD - 4, 0)
+    track:SetPoint("BOTTOMRIGHT", scroll, "BOTTOMRIGHT", UI.PAD - 4, 0)
+
+    local thumb = scroll:CreateTexture(nil, "OVERLAY")
+    thumb:SetColorTexture(theme.text[1], theme.text[2], theme.text[3], 0.27)
+    thumb:SetWidth(4)
+    thumb:SetPoint("TOP", track, "TOP", 0, 0)
+    thumb:SetHeight(30)
+
+    local function update()
+        local viewH = scroll:GetHeight() or 1
+        local contentH = child:GetHeight() or 1
+        local maxScroll = math.max(0, contentH - viewH)
+        local shown = maxScroll > 0.5
+        track:SetShown(shown); thumb:SetShown(shown)
+        if shown then
+            local ratio = viewH / contentH
+            thumb:SetHeight(math.max(30, viewH * ratio))
+            local cur = scroll:GetVerticalScroll() or 0
+            local frac = maxScroll > 0 and (cur / maxScroll) or 0
+            thumb:SetPoint("TOP", track, "TOP", 0, -frac * (viewH - thumb:GetHeight()))
+        end
+        return maxScroll
+    end
+
+    scroll:SetScript("OnMouseWheel", function(self, delta)
+        local maxScroll = math.max(0, (child:GetHeight() or 1) - (self:GetHeight() or 1))
+        local v = math.min(maxScroll, math.max(0, (self:GetVerticalScroll() or 0) - delta * 40))
+        self:SetVerticalScroll(v)
+        update()
+    end)
+    scroll:SetScript("OnSizeChanged", update)
+    scroll.UpdateScrollBar = update
+    return scroll, child
 end

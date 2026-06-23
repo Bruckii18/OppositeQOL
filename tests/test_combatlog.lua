@@ -36,21 +36,36 @@ end
 local logging = false                   -- what LoggingCombat() returns
 local tickerFn                          -- the function NewTicker is driving
 local tickerCancelled = false
+local stopTimerFn                       -- the function the delayed-stop NewTimer drives
+local instanceType, difficulty = "none", 0     -- what GetInstanceInfo() returns
+local cvars = { advancedCombatLogging = "0" }
 
 CreateFrame = function() return newWidget() end
 UIParent = newWidget()
 Minimap = newWidget()
 GameTooltip = newWidget()
 GetCursorPosition = function() return 100, 100 end
+GetPhysicalScreenSize = function() return 2560, 1440 end
+GetInstanceInfo = function() return "Zone", instanceType, difficulty end
+GetCVar = function(k) return cvars[k] end
+SetCVar = function(k, v) cvars[k] = tostring(v) end
 DEFAULT_CHAT_FRAME = { AddMessage = function() end }
 UISpecialFrames, SlashCmdList = {}, {}
 tinsert = table.insert
-LoggingCombat = function() return logging end
+-- getter/setter, like the real API: LoggingCombat() reads, LoggingCombat(b) sets.
+LoggingCombat = function(v)
+    if v ~= nil then logging = v and true or false end
+    return logging
+end
 C_Timer = {
     After     = function(_, fn) fn() end,                       -- run inline
     NewTicker = function(_, fn)
         tickerFn = fn
         return { Cancel = function() tickerCancelled = true end }
+    end,
+    NewTimer  = function(_, fn)
+        stopTimerFn = fn
+        return { Cancel = function() stopTimerFn = nil end }
     end,
 }
 
@@ -86,7 +101,8 @@ check("module registered", ns.modules.combatLog ~= nil)
 check("enabled by default", CL.enabled == true)
 check("default persisted to DB", OppositeQOLDB.modules.combatLog.enabled == true)
 check("per-module DB created", type(CL.db) == "table")
-check("no UI window", CL.hasUI ~= true)
+check("has options window", CL.hasUI == true)
+check("auto-log master defaults OFF", CL.db.autoLog and CL.db.autoLog.enabled == false)
 
 -- ---- initial state read from LoggingCombat (off at init) ----
 check("inactive at init", CL:IsActive() == false)
@@ -152,6 +168,80 @@ tickerFn = nil
 SlashCmdList["OPPOSITEQOL"]("enable Combat Log Status")
 check("enabled via slash (by display name)", CL.enabled == true)
 check("ticker reinstalled on re-enable", type(tickerFn) == "function")
+
+-- ===========================================================================
+-- Auto-logging (opt-in, default OFF)
+-- ===========================================================================
+local c = CL.db.autoLog
+check("ShouldLog false while master disabled", CL:ShouldLog() == false)
+
+c.enabled = true
+instanceType, difficulty = "raid", 15            -- heroic raid
+check("heroic raid logs when logHeroic on", CL:ShouldLog() == true)
+c.logHeroic = false
+check("that difficulty off -> no log", CL:ShouldLog() == false)
+c.logHeroic = true
+
+instanceType, difficulty = "raid", 17            -- LFR
+check("LFR respects its toggle (on)", CL:ShouldLog() == true)
+c.logLFR = false
+check("LFR off -> no log", CL:ShouldLog() == false)
+c.logLFR = true
+
+instanceType, difficulty = "party", 23           -- Mythic+ keystone
+check("M+ keystone logs when logMythicPlus on", CL:ShouldLog() == true)
+c.logMythicPlus = false
+check("M+ off -> no log", CL:ShouldLog() == false)
+c.logMythicPlus = true
+
+instanceType, difficulty = "raid", nil
+check("nil/stale difficulty -> no log", CL:ShouldLog() == false)
+instanceType, difficulty = "none", 0
+check("open world -> no log", CL:ShouldLog() == false)
+
+-- flip: entering a logged raid starts logging + sets the advanced-logging CVar
+logging = false
+cvars.advancedCombatLogging = "0"
+instanceType, difficulty = "raid", 16            -- mythic
+CL:ApplyLoggingState()
+check("auto-start turns logging ON", logging == true)
+check("advancedCombatLogging CVar enabled", cvars.advancedCombatLogging == "1")
+
+-- leaving: with delayed-stop, schedule a timer but keep logging until it fires
+instanceType, difficulty = "none", 0
+c.delaystop = true
+stopTimerFn = nil
+CL:ApplyLoggingState()
+check("delayed-stop timer scheduled", type(stopTimerFn) == "function")
+check("still logging until the timer fires", logging == true)
+stopTimerFn()
+check("logging stops after the delayed-stop timer", logging == false)
+
+-- with delayed-stop off, leaving stops immediately
+logging = false
+instanceType, difficulty = "raid", 16
+CL:ApplyLoggingState()                            -- start (we own it)
+c.delaystop = false
+instanceType, difficulty = "none", 0
+CL:ApplyLoggingState()
+check("immediate stop when delayed-stop off", logging == false)
+
+-- never stops a log the addon didn't start
+logging = true
+CL._autoStarted = false
+CL:ApplyLoggingState()
+check("does not stop a user-started log", logging == true)
+
+-- event path: a deferred recheck via ZONE_CHANGED_NEW_AREA evaluates auto-logging
+logging = false
+c.enabled = true
+instanceType, difficulty = "raid", 16
+CL:ZONE_CHANGED_NEW_AREA()                        -- C_Timer.After runs inline in the mock
+check("zone change evaluates auto-logging", logging == true)
+
+-- options window builds without error
+c.delaystop = true
+check("auto-logging options window builds", pcall(function() CL:Open() end))
 
 print(ok and "\nALL TESTS PASSED" or "\nSOME TESTS FAILED")
 os.exit(ok and 0 or 1)

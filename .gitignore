@@ -17,3 +17,6 @@ __pycache__/
 # BigWigs packager output
 .release/
 .install/
+
+# Private working doc for Claude Code — never commit
+CLAUDE.md

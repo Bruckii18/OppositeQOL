@@ -1,9 +1,13 @@
-## Interface: 120007
-## Title: OppositeQOL
+## Interface: 120000, 120001, 120005, 120007
+## Title: |cff33bce8OppositeQOL|r
 ## Notes: Quality-of-life tools for raid leaders.|nModule 1: Invite Helper.|nModule 2: PrePull.|nModule 3: Combat Log Status.
 ## Author: Michael
 ## X-Website: https://github.com/Bruckii18/OppositeQOL
 ## Version: @project-version@
+# Distribution IDs -- uncomment and fill in once the addon is published there
+# so addon managers can match it (CurseForge / Wago project pages).
+# ## X-Curse-Project-ID:
+# ## X-Wago-ID:
 ## SavedVariables: OppositeQOLDB
 ## IconTexture: Interface\AddOns\OppositeQOL\Media\Opposite_HB_Discord_128x128
 
@@ -14,4 +18,5 @@ InviteHelper.lua
 WhoPulled.lua
 CombatLog.lua
 Config.lua
+Profiles.lua
 Minimap.lua
