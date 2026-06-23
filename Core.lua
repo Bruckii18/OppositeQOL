@@ -365,6 +365,12 @@ function ns:Initialize()
     self:InitProfiles()
     self:RunMigrations(self.db)
 
+    -- Apply the saved colour palette before any module builds a window, so every
+    -- widget is created with the chosen accent. Theme choice is account-wide.
+    if self.UI and self.UI.ApplyPalette then
+        self.db.theme = self.UI.ApplyPalette(self.db.theme)
+    end
+
     for _, key in ipairs(self.moduleOrder) do
         local m = self.modules[key]
 
@@ -409,10 +415,12 @@ local function PrintHelp()
     ns:Print("  /oqol invite           open the Invite Helper")
     ns:Print("  /oqol pull             open the PrePull report")
     ns:Print("  /oqol log              show if combat logging is active")
+    ns:Print("  /oqol ext              open the Externals Tracker")
     ns:Print("  /oqol list             show modules and their state")
     ns:Print("  /oqol enable <module>  enable a module")
     ns:Print("  /oqol disable <module> disable a module")
     ns:Print("  /oqol minimap          show/hide the minimap button")
+    ns:Print("  /oqol theme [name]     list or switch the colour theme")
     ns:Print("  /oqol profile          manage settings profiles")
 end
 
@@ -432,6 +440,26 @@ SlashCmdList["OPPOSITEQOL"] = function(msg)
 
     elseif cmd == "pull" or cmd == "wp" or cmd == "whopulled" then
         if ns.WhoPulled then ns.WhoPulled:Toggle() end
+
+    elseif cmd == "ext" or cmd == "externals" then
+        if ns.Externals then ns.Externals:Toggle() end
+
+    elseif cmd == "theme" then
+        local UI = ns.UI
+        if rest == "" or rest:lower() == "list" then
+            ns:Print("colour themes (active marked *):")
+            for _, p in ipairs(UI.palettes) do
+                ns:Print(("  %s%s  (%s)"):format(p.key == ns.db.theme and "* " or "  ", p.name, p.key))
+            end
+        else
+            local p = UI.PaletteByKey(rest:lower())
+            if not p then
+                ns:Print("unknown theme: '" .. rest .. "'  (try /oqol theme list)")
+            else
+                ns.db.theme = UI.ApplyPalette(p.key)
+                ns:Print(("theme set to %s - /reload to apply it everywhere."):format(p.name))
+            end
+        end
 
     elseif cmd == "log" or cmd == "combatlog" or cmd == "cl" then
         if not ns.CombatLog then

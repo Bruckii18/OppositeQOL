@@ -240,7 +240,9 @@ check("disabled via slash (by key)", EP.enabled == false)
 prints = {}
 local okGuard = pcall(function() EP:Toggle() end)
 check("toggle while disabled is safe", okGuard)
-check("toggle while disabled warns", contains(lastPrint(), "disabled"))
+-- New shell behaviour: a disabled module opens to its page (with an inline
+-- "disabled" notice + the sidebar switch), rather than refusing with a chat warning.
+check("toggle while disabled does not chat-warn", not contains(lastPrint(), "disabled"))
 SlashCmdList["OPPOSITEQOL"]("enable PrePull")
 check("enabled via slash (by display name)", EP.enabled == true)
 

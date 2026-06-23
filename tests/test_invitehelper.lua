@@ -126,7 +126,9 @@ check("disable persisted", OppositeQOLDB.modules.inviteHelper.enabled == false)
 prints = {}
 local okGuard = pcall(function() ns.InviteHelper:Toggle() end)
 check("toggle while disabled is safe", okGuard)
-check("toggle while disabled warns user", printed("disabled"))
+-- New shell behaviour: a disabled module opens to its page (with an inline
+-- "disabled" notice + the sidebar switch), rather than refusing with a chat warning.
+check("toggle while disabled does not chat-warn", not printed("disabled"))
 
 SlashCmdList["OPPOSITEQOL"]("enable Invite Helper")
 check("enabled via slash (by display name)", ns.InviteHelper.enabled == true)

@@ -187,21 +187,15 @@ local EVENTS = {
 }
 
 -- ---------------------------------------------------------------------------
--- Options window (auto-logging)
+-- Options page (auto-logging) -- built into the shell's content pane.
 -- ---------------------------------------------------------------------------
-local optsFrame
-
-local function BuildOptions(self)
-    optsFrame = UI.CreatePanel({
-        name = "OppositeQOLCombatLogFrame", width = 380, height = 360,
-        title = "OppositeQOL", subtitle = "Combat Log", posKey = "combatLog",
-    })
+function M:BuildOptions(parent)
     local c = self.db.autoLog
     local function setter(key, recheck)
         return function(v) c[key] = v; if recheck then self:RecheckAutoLog() end end
     end
 
-    local page = UI.Page(optsFrame, -48)
+    local page = UI.Page(parent, -48)
     page:Header("Auto-start logging")
     page:Check("Enable auto-start", function() return c.enabled == true end, setter("enabled", true),
         "Turn /combatlog on automatically when you enter a logged instance. Off by default.")
@@ -219,21 +213,11 @@ local function BuildOptions(self)
 end
 
 function M:Open()
-    if not self.enabled then
-        ns:Print(self.name .. " is disabled - enable it with /oqol.")
-        return
-    end
-    if not optsFrame then BuildOptions(self) end
-    optsFrame:Show()
+    if ns.Config then ns.Config:OpenModule(self.key) end
 end
 
 function M:Toggle()
-    if not self.enabled then
-        ns:Print(self.name .. " is disabled - enable it with /oqol.")
-        return
-    end
-    if not optsFrame then BuildOptions(self) end
-    if optsFrame:IsShown() then optsFrame:Hide() else optsFrame:Show() end
+    if ns.Config then ns.Config:ToggleModule(self.key) end
 end
 
 -- ---------------------------------------------------------------------------

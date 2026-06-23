@@ -362,11 +362,8 @@ function M:RefreshReport()
     if frame then frame.edit:SetText(self:BuildReport()) end
 end
 
-local function BuildUI()
-    frame = UI.CreatePanel({
-        name = "OppositeQOLWhoPulledFrame", width = 560, height = 470,
-        title = "OppositeQOL", subtitle = "PrePull", posKey = "whoPulled",
-    })
+function M:BuildOptions(parent)
+    frame = parent   -- the shell's content pane; all `frame.*` refs below still hold
 
     -- Settings strip.
     local _, soundLabel = settingToggle(-44, "Alarm sound on pull", "sound")
@@ -497,20 +494,9 @@ function M:OnDisable()
 end
 
 function M:Open()
-    if not self.enabled then
-        ns:Print(self.name .. " is disabled - enable it with /oqol.")
-        return
-    end
-    if not frame then BuildUI() end
-    self:RefreshReport()
-    frame:Show()
+    if ns.Config then ns.Config:OpenModule(self.key); self:RefreshReport() end
 end
 
 function M:Toggle()
-    if not self.enabled then
-        ns:Print(self.name .. " is disabled - enable it with /oqol.")
-        return
-    end
-    if not frame then BuildUI() end
-    if frame:IsShown() then frame:Hide() else self:Open() end
+    if ns.Config then ns.Config:ToggleModule(self.key) end
 end

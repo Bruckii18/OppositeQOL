@@ -20,12 +20,45 @@ UI.theme = {
     borderHi   = { 0.18, 0.18, 0.20, 1 },    -- subtle inner border on cells
     text       = { 0.86, 0.86, 0.88, 1 },
     textDim    = { 0.46, 0.46, 0.50, 1 },
-    accent     = { 0x33/255, 0xbc/255, 0xe8/255, 1 },  -- cool cyan accent (#33bce8)
+    -- accent / accent2 are the THEMED pair (see UI.palettes); ApplyPalette swaps
+    -- them at login. The greys above + the semantic green/red below stay constant.
+    accent     = { 0x2f/255, 0xe3/255, 0xc4/255, 1 },  -- primary accent (default: Ellesmere teal)
+    accent2    = { 0x18/255, 0xb3/255, 0x9a/255, 1 },  -- secondary accent (glows / gradients)
     green      = { 0x66/255, 0xd9/255, 0x77/255, 1 },  -- on / invite (#66d977)
     red        = { 0xeb/255, 0x61/255, 0x61/255, 1 },  -- off / remove (#eb6161)
     rowHover   = { 1, 1, 1, 0.05 },
 }
 local theme = UI.theme
+
+-- Selectable colour palettes. Each is a pair of accent colours that recolour the
+-- whole suite: everything chromatic reads theme.accent / theme.accent2 (through
+-- UI.Hex for chat). The greys and the semantic green/red (on/off) never change.
+-- The active choice lives in ns.db.theme and is applied once at login, BEFORE any
+-- window is built (Core:Initialize); switching at runtime takes full effect on a
+-- /reload, since WoW bakes colours into frames when they are created.
+UI.palettes = {
+    { key = "teal",    name = "Teal",           accent = { 0x2f/255, 0xe3/255, 0xc4/255 }, accent2 = { 0x18/255, 0xb3/255, 0x9a/255 } },
+    { key = "cyan",    name = "Cyan",           accent = { 0x33/255, 0xbc/255, 0xe8/255 }, accent2 = { 0x24/255, 0x86/255, 0xad/255 } },
+    { key = "emerald", name = "Emerald",        accent = { 0x46/255, 0xd9/255, 0x8a/255 }, accent2 = { 0x1f/255, 0x9d/255, 0x63/255 } },
+    { key = "amber",   name = "Amber",          accent = { 0xf0/255, 0xb4/255, 0x3c/255 }, accent2 = { 0xb0/255, 0x7d/255, 0x18/255 } },
+    { key = "violet",  name = "Violet",         accent = { 0xa8/255, 0x84/255, 0xf0/255 }, accent2 = { 0x6f/255, 0x54/255, 0xc0/255 } },
+    { key = "rose",    name = "Rose",           accent = { 0xe0/255, 0x52/255, 0x6c/255 }, accent2 = { 0x9c/255, 0x35/255, 0x51/255 } },
+}
+
+function UI.PaletteByKey(key)
+    for _, p in ipairs(UI.palettes) do if p.key == key then return p end end
+end
+
+-- Recolour the live theme IN PLACE (so the same theme table every file localised
+-- keeps working). Unknown key falls back to the first palette. Returns the key
+-- actually applied.
+function UI.ApplyPalette(key)
+    local p = UI.PaletteByKey(key) or UI.palettes[1]
+    theme.accent  = { p.accent[1],  p.accent[2],  p.accent[3],  1 }
+    theme.accent2 = { p.accent2[1], p.accent2[2], p.accent2[3], 1 }
+    UI.activePalette = p.key
+    return p.key
+end
 
 -- "ffRRGGBB" colour-escape body from a theme colour table {r,g,b}. The single
 -- source of truth for chat-text colours, so Core/CombatLog never hard-code hexes
@@ -56,7 +89,51 @@ UI.BACKDROP = {
 local FONT     = UI.FONT
 local BACKDROP = UI.BACKDROP
 
-function UI.ApplyBackdrop(f, bg, border)
+-- Rounded-corner backdrop (self-authored 9-slice textures; see
+-- tools/gen_round_texture.py). SetBackdrop only rounds via baked edge art, so the
+-- modern path is a sliced Texture instead: one white rounded-rect fill + one
+-- rounded outline, tinted to the theme via SetVertexColor. Extension dropped, as
+-- with UI.LOGO. ROUND_MARGIN is the 9-slice corner size in the texture's NATIVE
+-- pixels (>= the authored 24px radius); tune alongside the asset.
+UI.ROUND_FILL   = "Interface\\AddOns\\OppositeQOL\\Media\\Opposite_RoundFill_128"
+UI.ROUND_EDGE   = "Interface\\AddOns\\OppositeQOL\\Media\\Opposite_RoundEdge_128"
+UI.ROUND_MARGIN = 28
+
+-- Per-frame round textures kept in a weak-keyed side table (never new keys on the
+-- frame itself -- the taint-safe pattern, and it keeps reads plain-nil).
+local roundTex = setmetatable({}, { __mode = "k" })
+
+local function sliced(f, layer, file)
+    local t = f:CreateTexture(nil, layer)
+    t:SetAllPoints(f)
+    t:SetTexture(file)
+    t:SetTextureSliceMargins(UI.ROUND_MARGIN, UI.ROUND_MARGIN, UI.ROUND_MARGIN, UI.ROUND_MARGIN)
+    if Enum and Enum.UITextureSliceMode then          -- Stretched is the default; guard for tests
+        t:SetTextureSliceMode(Enum.UITextureSliceMode.Stretched)
+    end
+    return t
+end
+
+-- Rounded fill (+ optional rounded border), recoloured from the theme each call.
+function UI.ApplyRoundedBackdrop(f, bg, border)
+    local t = roundTex[f]
+    if not t then
+        t = { fill = sliced(f, "BACKGROUND", UI.ROUND_FILL) }
+        roundTex[f] = t
+    end
+    t.fill:SetVertexColor(bg[1], bg[2], bg[3], bg[4] or 1)
+    if border then
+        if not t.edge then t.edge = sliced(f, "BORDER", UI.ROUND_EDGE) end
+        t.edge:SetVertexColor(border[1], border[2], border[3], border[4] or 1)
+    end
+end
+
+-- Flat 1px ElvUI-style backdrop, or (rounded=true) the 9-slice rounded one. The
+-- flat path is unchanged, so every existing caller keeps its look.
+function UI.ApplyBackdrop(f, bg, border, rounded)
+    if rounded then
+        return UI.ApplyRoundedBackdrop(f, bg, border)
+    end
     f:SetBackdrop(BACKDROP)
     f:SetBackdropColor(bg[1], bg[2], bg[3], bg[4] or 1)
     f:SetBackdropBorderColor(border[1], border[2], border[3], border[4] or 1)
@@ -246,7 +323,7 @@ function UI.CreatePanel(opts)
     f:SetSize(opts.width, opts.height)
     f:SetFrameStrata("DIALOG")
     f:SetClampedToScreen(true)
-    UI.ApplyBackdrop(f, theme.bg, theme.border)
+    UI.ApplyBackdrop(f, theme.bg, theme.borderHi, true)   -- rounded window
 
     f:SetMovable(true)
     f:EnableMouse(true)
@@ -278,15 +355,15 @@ function UI.CreatePanel(opts)
     f.logo = logo
 
     local title = f:CreateFontString(nil, "OVERLAY")
-    StyleFont(title, 15, theme.text)
-    title:SetPoint("LEFT", logo, "RIGHT", 6, 0)
+    StyleFont(title, 17, theme.text)
+    title:SetPoint("LEFT", logo, "RIGHT", 8, 1)
     title:SetText(opts.title or "OppositeQOL")
     f.titleFS = title
 
     if opts.subtitle then
         local sub = f:CreateFontString(nil, "OVERLAY")
-        StyleFont(sub, 15, theme.accent)
-        sub:SetPoint("LEFT", title, "RIGHT", 7, 0)
+        StyleFont(sub, 17, theme.accent)
+        sub:SetPoint("LEFT", title, "RIGHT", 8, 0)
         sub:SetText(opts.subtitle)
     end
 
@@ -294,13 +371,47 @@ function UI.CreatePanel(opts)
     close:SetPoint("TOPRIGHT", -8, -10)
     close:SetScript("OnClick", function() f:Hide() end)
 
-    local divider = UI.Sharp(f:CreateTexture(nil, "ARTWORK"))
-    divider:SetColorTexture(theme.accent[1], theme.accent[2], theme.accent[3], 0.5)
-    divider:SetHeight(1)
-    divider:SetPoint("TOPLEFT", 14, -34)
-    divider:SetPoint("TOPRIGHT", -14, -34)
+    -- Header base: a bright accent line with a soft glow fading up into the band
+    -- (the EllesmereUI "aurora" cue). The gradient is guarded so the logic tests
+    -- (no CreateColor) simply fall back to a faint flat tint.
+    local line = UI.Sharp(f:CreateTexture(nil, "ARTWORK"))
+    line:SetColorTexture(theme.accent[1], theme.accent[2], theme.accent[3], 0.85)
+    line:SetHeight(2)
+    line:SetPoint("TOPLEFT", 14, -34)
+    line:SetPoint("TOPRIGHT", -14, -34)
+    f.headerLine = line
+
+    local glow = f:CreateTexture(nil, "ARTWORK")
+    glow:SetPoint("BOTTOMLEFT", line, "TOPLEFT", 0, 0)
+    glow:SetPoint("BOTTOMRIGHT", line, "TOPRIGHT", 0, 0)
+    glow:SetHeight(20)
+    if CreateColor and glow.SetGradient then
+        glow:SetColorTexture(1, 1, 1, 1)
+        glow:SetGradient("VERTICAL",
+            CreateColor(theme.accent[1], theme.accent[2], theme.accent[3], 0.22),  -- bottom (at the line)
+            CreateColor(theme.accent[1], theme.accent[2], theme.accent[3], 0.0))   -- top (fades out)
+    else
+        glow:SetColorTexture(theme.accent[1], theme.accent[2], theme.accent[3], 0.05)
+    end
 
     return f
+end
+
+-- A lifted, bordered section card (EllesmereUI-style grouping). Pass a title for
+-- an accent caps label at the top-left; size/anchor the card yourself and place
+-- content inside (offset titled content ~28px down). Returns the card frame.
+function UI.CreateCard(parent, title)
+    local card = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    card._oqolStripe = 0   -- a fresh row container: row striping starts from zero
+    UI.ApplyBackdrop(card, theme.bgInput, { theme.accent[1], theme.accent[2], theme.accent[3], 0.30 }, true)  -- rounded, faint accent edge
+    if title then
+        local fs = card:CreateFontString(nil, "OVERLAY")
+        StyleFont(fs, 11, theme.accent)
+        fs:SetPoint("TOPLEFT", 12, -10)
+        fs:SetText(tostring(title):upper())
+        card.titleFS = fs
+    end
+    return card
 end
 
 -- ===========================================================================

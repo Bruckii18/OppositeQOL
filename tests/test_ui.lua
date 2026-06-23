@@ -64,9 +64,19 @@ local function check(name, cond)
 end
 
 -- ---- colour helper: single source of truth, round-trips the theme hexes ----
-check("Hex(accent) == ff33bce8", UI.Hex(theme.accent) == "ff33bce8")
+check("Hex(accent) == ff2fe3c4 (teal default)", UI.Hex(theme.accent) == "ff2fe3c4")
 check("Hex(green)  == ff66d977", UI.Hex(theme.green) == "ff66d977")
 check("Hex(red)    == ffeb6161", UI.Hex(theme.red) == "ffeb6161")
+
+-- ---- selectable colour palettes ----
+check("palettes defined", type(UI.palettes) == "table" and #UI.palettes >= 2)
+check("PaletteByKey finds cyan", UI.PaletteByKey("cyan") ~= nil)
+check("ApplyPalette('cyan') recolours the accent",
+    (function() UI.ApplyPalette("cyan"); return UI.Hex(theme.accent) == "ff33bce8" end)())
+check("ApplyPalette sets a secondary accent", type(theme.accent2) == "table")
+check("ApplyPalette unknown key falls back to first", UI.ApplyPalette("nope") == UI.palettes[1].key)
+UI.ApplyPalette("teal")   -- restore default for the rest of the suite
+check("ApplyPalette('teal') restores teal", UI.Hex(theme.accent) == "ff2fe3c4")
 
 -- ---- snap math (pure) ----
 check("Snap mid step",   UI.Snap(5.4, 0, 10, 1) == 5)
@@ -130,6 +140,20 @@ check("Page:Height() sums rows + symmetric pad", page:Height() == expected)
 check("CreateScrollArea returns scroll+child", (function()
     local s, c = UI.CreateScrollArea(newWidget(), 30, 10)
     return s ~= nil and c ~= nil and type(s.UpdateScrollBar) == "function"
+end)())
+
+-- ---- card primitive constructs (titled + untitled) ----
+check("CreateCard with title constructs", UI.CreateCard(newWidget(), "Section") ~= nil)
+check("CreateCard without title constructs", UI.CreateCard(newWidget()) ~= nil)
+
+-- ---- rounded backdrop: flat path unchanged, rounded path constructs ----
+check("ApplyBackdrop flat path runs", pcall(UI.ApplyBackdrop, newWidget(), theme.bg, theme.border))
+check("ApplyBackdrop rounded path runs",
+    pcall(UI.ApplyBackdrop, newWidget(), theme.bg, theme.borderHi, true))
+check("ApplyRoundedBackdrop is idempotent (reuses textures)", (function()
+    local f = newWidget()
+    UI.ApplyRoundedBackdrop(f, theme.bgInput, theme.accent)
+    return pcall(UI.ApplyRoundedBackdrop, f, theme.bgInput, theme.accent)
 end)())
 
 print(ok and "\nALL TESTS PASSED" or "\nSOME TESTS FAILED")

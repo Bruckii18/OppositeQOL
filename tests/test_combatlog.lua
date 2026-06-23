@@ -104,6 +104,17 @@ check("per-module DB created", type(CL.db) == "table")
 check("has options window", CL.hasUI == true)
 check("auto-log master defaults OFF", CL.db.autoLog and CL.db.autoLog.enabled == false)
 
+-- ---- colour theme: default applied at init, switchable via slash ----
+check("default theme applied at init",
+    OppositeQOLDB.theme == "teal" and ns.UI.Hex(ns.UI.theme.accent) == "ff2fe3c4")
+SlashCmdList["OPPOSITEQOL"]("theme cyan")
+check("/oqol theme switches the palette",
+    OppositeQOLDB.theme == "cyan" and ns.UI.Hex(ns.UI.theme.accent) == "ff33bce8")
+prints = {}
+SlashCmdList["OPPOSITEQOL"]("theme list")
+check("/oqol theme list prints without error", #prints > 0)
+SlashCmdList["OPPOSITEQOL"]("theme teal")   -- restore
+
 -- ---- initial state read from LoggingCombat (off at init) ----
 check("inactive at init", CL:IsActive() == false)
 check("status text shows 'not active' in red",
@@ -242,6 +253,18 @@ check("zone change evaluates auto-logging", logging == true)
 -- options window builds without error
 c.delaystop = true
 check("auto-logging options window builds", pcall(function() CL:Open() end))
+
+-- ---- app shell (Config): module Open routes into the shell pane ----
+check("shell built on module Open", ns.Config.frame ~= nil)
+check("OpenModule selects the module", ns.Config.current == "combatLog")
+check("module page cached in the shell", ns.Config.pages.combatLog ~= nil)
+check("sidebar nav row exists for the module", ns.Config.navRows.combatLog ~= nil)
+ns.Config:Refresh()
+check("nav toggle reflects enabled state",
+    ns.Config.navRows.combatLog._toggle:GetChecked() == CL.enabled)
+check("ToggleModule hides when already shown on that module",
+    pcall(function() ns.Config:ToggleModule("combatLog") end)
+    and ns.Config.frame:IsShown() == false)
 
 print(ok and "\nALL TESTS PASSED" or "\nSOME TESTS FAILED")
 os.exit(ok and 0 or 1)

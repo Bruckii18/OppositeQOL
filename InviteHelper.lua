@@ -335,15 +335,8 @@ StaticPopupDialogs["OQOL_UNINVITE_CONFIRM"] = {
 
 local frame  -- built lazily on first open
 
-local function BuildUI()
-    frame = UI.CreatePanel({
-        name     = "OppositeQOLInviteFrame",
-        width    = 580,
-        height   = 532,
-        title    = "OppositeQOL",
-        subtitle = "Invite Helper",
-        posKey   = "inviteHelper",
-    })
+function IH:BuildOptions(parent)
+    frame = parent   -- the shell's content pane; all `frame.*` refs below still hold
 
     -- Input label.
     local inputLabel = frame:CreateFontString(nil, "OVERLAY")
@@ -535,25 +528,11 @@ end
 -- ===========================================================================
 
 function IH:Open()
-    if not self.enabled then
-        ns:Print(self.name .. " is disabled — enable it with /oqol.")
-        return
-    end
-    if not frame then BuildUI() end
-    frame:Show()
+    if ns.Config then ns.Config:OpenModule(self.key) end
 end
 
 function IH:Toggle()
-    if not self.enabled then
-        ns:Print(self.name .. " is disabled — enable it with /oqol.")
-        return
-    end
-    if not frame then BuildUI() end
-    if frame:IsShown() then
-        frame:Hide()
-    else
-        frame:Show()
-    end
+    if ns.Config then ns.Config:ToggleModule(self.key) end
 end
 
 function IH:OnDisable()
