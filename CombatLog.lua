@@ -7,9 +7,10 @@
 --      as you enter a raid / Mythic+ and (optionally) off again shortly after you
 --      leave. Settings live in /oqol (Open) -> Combat Log.
 --
--- Detection is locale-independent: we read LoggingCombat() on a light timer (to
--- catch a manual /combatlog, which fires no event) plus on zone/encounter
--- changes, and ask the minimap button to repaint when the state changes.
+-- Detection is locale-independent: we read the logging state (first-party via
+-- C_ChatInfo.IsLoggingCombat on 12.0.7+, else the LoggingCombat() global) on the
+-- CHAT_LOGGING_CHANGED event, on zone/encounter changes, and on a light fallback
+-- poll, and ask the minimap button to repaint when the state changes.
 --
 -- LoggingCombat (read and write) is UNSECURED -- safe to call in combat -- so the
 -- auto-start path deliberately has NO InCombatLockdown guard; it should be able to
@@ -49,7 +50,13 @@ local GREEN, RED = UI.Hex(theme.green), UI.Hex(theme.red)
 -- LoggingCombat() may be absent on very old clients; guard it.
 local LoggingCombat = _G.LoggingCombat or function() return false end
 
-local POLL = 2  -- seconds between polls; a single boolean read, negligible cost
+-- C_ChatInfo.IsLoggingCombat() (12.0.7+) reads the state first-party and returns
+-- (enabled, advanced) in one call; the CHAT_LOGGING_CHANGED event then lets us
+-- react to a manual /combatlog immediately instead of only on the next poll.
+-- Both are nil-guarded so older clients fall back to the LoggingCombat() global.
+local C_ChatInfo = _G.C_ChatInfo
+
+local POLL = 2  -- seconds between polls; a fallback for clients lacking the event
 
 -- ---------------------------------------------------------------------------
 -- State
@@ -58,9 +65,20 @@ function M:IsActive()
     return self.active and true or false
 end
 
+-- Read the current logging state, preferring the first-party C_ChatInfo reader
+-- (which also exposes the "advanced" flag) and falling back to the global.
+-- Returns (enabled, advanced); advanced is nil when only the global is available.
+function M:ReadLoggingState()
+    if C_ChatInfo and C_ChatInfo.IsLoggingCombat then
+        local ok, enabled, advanced = pcall(C_ChatInfo.IsLoggingCombat)
+        if ok then return enabled and true or false, advanced and true or false end
+    end
+    return LoggingCombat() and true or false, nil
+end
+
 -- Read the live state; if it changed, cache it and repaint the minimap dot.
 function M:Check()
-    local on = LoggingCombat() and true or false
+    local on = self:ReadLoggingState()
     if on ~= self.active then
         self.active = on
         self:Refresh()
@@ -180,10 +198,14 @@ function M:ZONE_CHANGED_NEW_AREA() recheck(self); scheduleAuto(self, 2) end
 function M:CHALLENGE_MODE_START()  scheduleAuto(self, 1) end  -- keystone difficulty change
 function M:ENCOUNTER_START()       recheck(self) end
 function M:ENCOUNTER_END()         recheck(self) end
+-- A manual /combatlog (or any logging toggle) fires this on 12.0.7+, so the dot
+-- updates at once rather than on the next poll. We re-read the real state instead
+-- of trusting the payload, so it's robust regardless of which log changed.
+function M:CHAT_LOGGING_CHANGED()  self:Check() end
 
 local EVENTS = {
     "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "CHALLENGE_MODE_START",
-    "ENCOUNTER_START", "ENCOUNTER_END",
+    "ENCOUNTER_START", "ENCOUNTER_END", "CHAT_LOGGING_CHANGED",
 }
 
 -- ---------------------------------------------------------------------------
@@ -227,7 +249,7 @@ function M:OnInitialize()
     ns.db.combatLog = ns.db.combatLog or {}
     self.db = ns.db.combatLog
     ns.DeepMerge(self.db, self.defaults)   -- fills autoLog defaults, keeps saved values
-    self.active = LoggingCombat() and true or false
+    self.active = self:ReadLoggingState()
 end
 
 -- Refill cached state when the active profile changes.
@@ -248,7 +270,8 @@ function M:OnEnable()
     for _, e in ipairs(EVENTS) do
         pcall(self.listener.RegisterEvent, self.listener, e)
     end
-    -- A manual /combatlog fires no event, so poll lightly as the catch-all.
+    -- CHAT_LOGGING_CHANGED catches a manual /combatlog on 12.0.7+; keep a light
+    -- poll as the fallback for clients that don't fire it.
     if C_Timer and C_Timer.NewTicker and not self.ticker then
         self.ticker = C_Timer.NewTicker(POLL, function() self:Check() end)
     end

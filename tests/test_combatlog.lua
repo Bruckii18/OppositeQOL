@@ -57,6 +57,10 @@ LoggingCombat = function(v)
     if v ~= nil then logging = v and true or false end
     return logging
 end
+-- C_ChatInfo.IsLoggingCombat() (12.0.7+) -> (enabled, advanced). Reads the same
+-- `logging` var so the existing assertions hold, plus a settable advanced flag.
+local advancedLog = false
+C_ChatInfo = { IsLoggingCombat = function() return logging, advancedLog end }
 C_Timer = {
     After     = function(_, fn) fn() end,                       -- run inline
     NewTicker = function(_, fn)
@@ -136,6 +140,16 @@ check("ticker installed on enable", type(tickerFn) == "function")
 logging = true
 tickerFn()                                  -- simulate one poll tick
 check("poll tick detects manual /combatlog", CL:IsActive() == true)
+
+-- ---- first-party read + event-driven refresh (12.0.7) ----
+logging, advancedLog = true, true
+check("ReadLoggingState reads C_ChatInfo (enabled, advanced)",
+    (function() local e, a = CL:ReadLoggingState(); return e == true and a == true end)())
+advancedLog = false
+logging = false; CL:Check()
+logging = true
+check("CHAT_LOGGING_CHANGED refreshes immediately (no poll wait)",
+    pcall(function() CL:CHAT_LOGGING_CHANGED() end) and CL:IsActive() == true)
 
 -- ---- zone / encounter events refresh without error ----
 logging = false

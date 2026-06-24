@@ -6,22 +6,32 @@
 -- optionally, speaks the buff via the game's text-to-speech and/or plays a sound.
 -- You can toggle each spell, override its spoken phrase, and add your own by ID.
 --
--- DETECTION, the Midnight (12.0) way -- NOT the combat log:
+-- DETECTION, the Midnight (12.0) way -- NOT the combat log, and NOT by reading
+-- the spellId off an aura:
 --   In 12.0 the combat log is unreadable (CLEU yields nothing usable -- the
---   project's core constraint, see CLAUDE.md), so this module does the same thing
---   EllesmereUI does: it listens to UNIT_AURA scoped to the player and reads the
---   buff straight off the C_UnitAuras AuraData (updateInfo.addedAuras) -- spellId,
---   icon, sourceUnit, isFromPlayerOrPlayerPet.
+--   project's core constraint, see CLAUDE.md). So, like EllesmereUI, we listen to
+--   UNIT_AURA scoped to the player. But the obvious approach -- read each
+--   updateInfo.addedAuras entry's .spellId and ask "is it one I track?" -- is a
+--   TRAP: in combat EVERY field of an AuraData is a SECRET VALUE, the spellId
+--   INCLUDED (field-confirmed in EllesmereUI; you can't even branch on it). Since
+--   externals land mid-pull, that path silently skips every single one of them --
+--   it only ever "works" out of combat (e.g. pre-pull raid buffs). That was the
+--   "never fires in a fight" bug this approach is built to avoid.
 --
---   One hard limitation falls out of that: an aura's sourceUnit (its caster) is a
---   SECRET VALUE while in combat -- Lua can't even branch on it (issecretvalue()
---   is true). Since externals are cast mid-pull, the caster is usually unknowable
---   exactly when it matters, so we deliberately DON'T try to name the caster; the
---   alert announces the spell only. spellId / icon stay readable, so the "which
---   buff landed" alert + TTS work reliably. Every combat-time read is wrapped in
---   the same isSecret() guard EllesmereUI uses, and self-cast exclusion is
---   best-effort (it too is secret in combat; most tracked externals aren't
---   self-castable anyway).
+--   The secret-safe way (EllesmereUI's Bloodlust tracker does exactly this): never
+--   read a spellId back off an aura. Instead, on every UNIT_AURA, ASK by KNOWN id
+--   -- C_UnitAuras.GetPlayerAuraBySpellID(id) for each tracked spell. Querying a
+--   known id returns the aura even when its fields are secret, so we learn "do I
+--   have THIS buff?" without ever touching the secret spellId. A tracked spell
+--   that is newly present since the last scan (a rising edge) = freshly applied
+--   -> alert. Removal/expiry is the falling edge of the same scan.
+--
+--   Caster stays deliberately unnamed: an aura's sourceUnit is secret in combat
+--   too, and externals are cast mid-pull, so naming the caster is usually
+--   impossible exactly when it matters -- the alert announces the SPELL only. Icon
+--   and timing are read best-effort and fall back when secret (SpellIcon by id;
+--   the BASELINE dur table -- see below). Self-cast exclusion is best-effort for
+--   the same reason. Every combat-time field read is wrapped in isSecret().
 --
 -- COUNTDOWN: the banner counts down the buff's remaining time on its icon. Out
 --   of combat we read aura.expirationTime / duration straight off the AuraData;
@@ -78,6 +88,16 @@ local C_UnitAuras = _G.C_UnitAuras
 -- issecretvalue() may be absent on older clients; treat "not secret" as the
 -- default so the guard is a harmless no-op there.
 local isSecret = _G.issecretvalue or function() return false end
+
+-- C_Secrets (12.0.7+) lets us ASK whether a query would be secret instead of
+-- discovering it the hard way. We use it only to self-diagnose trackability (see
+-- M:IsReliablyTracked) -- detection itself never needs it. Absent on older
+-- clients, so every use is nil-guarded.
+local C_Secrets = _G.C_Secrets
+-- SecrecyLevel enum (Blizzard's SecretWrapperConstants): a per-spell base class
+-- that "takes priority over restrictions". AlwaysSecret is the only one that can
+-- defeat presence detection (the aura may be withheld even when it's on you).
+local SECRECY_NEVER, SECRECY_ALWAYS, SECRECY_CONTEXTUAL = 0, 1, 2
 
 local UNKNOWN_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
 local DEFAULT_SOUND = "Raid Warning"   -- sound a spell uses when first set to "sound"
@@ -154,6 +174,34 @@ function M:SpellIcon(id)
     end
     local info = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(id)
     return info and info.iconID or nil
+end
+
+-- ---------------------------------------------------------------------------
+-- Detection-reliability self-check (the honest answer to "can we trust this?").
+--
+-- Presence detection (GetPlayerAuraBySpellID, rising edge) never reads a secret
+-- value -- it only checks non-nil -- so secret aura FIELDS can't break it. The
+-- single thing that could is a spell whose aura the client flags AlwaysSecret:
+-- then GetPlayerAuraBySpellID may withhold the aura even when it's on you, and we
+-- can't see it land. C_Secrets.GetSpellAuraSecrecy lets us detect that case up
+-- front and TELL the user, instead of failing silently. In practice no mainstream
+-- external is AlwaysSecret (Blizzard's own raid frames show them), so this is a
+-- belt-and-suspenders diagnostic, not an expected outcome.
+-- ---------------------------------------------------------------------------
+-- Returns the SecrecyLevel (0 never / 1 always / 2 contextual) for a spell's
+-- aura, or nil when the probe is unavailable (older client, restrictions off).
+function M:AuraSecrecy(id)
+    if not (C_Secrets and C_Secrets.GetSpellAuraSecrecy) then return nil end
+    local ok, level = pcall(C_Secrets.GetSpellAuraSecrecy, id)
+    if ok and not isSecret(level) then return level end
+    return nil
+end
+
+-- True unless the client flags this spell's aura AlwaysSecret (then presence
+-- detection can't reliably see it land). Defaults to true when unprobeable, so
+-- behaviour is unchanged on clients without C_Secrets.
+function M:IsReliablyTracked(id)
+    return self:AuraSecrecy(id) ~= SECRECY_ALWAYS
 end
 
 -- The phrase TTS speaks: per-spell override, else the baseline default, else name.
@@ -455,7 +503,7 @@ function M:HideAlert()
     self:CancelCountdown()
     if a.cdFS then a.cdFS:SetText("") end
     if a.cd and a.cd.Clear then a.cd:Clear() end
-    self._alertIid = nil
+    self._shownSid = nil
     a:Hide()
 end
 
@@ -519,7 +567,7 @@ end
 -- Show (or replace in place) the alert for a spell. When we know how long the
 -- buff lasts (expiry, from M:ResolveExpiry) we count it down on the icon;
 -- otherwise we keep the old fixed fadeTime hold (custom spells mid-combat).
-function M:ShowAlert(name, icon, cat, iid, expiry, total)
+function M:ShowAlert(name, icon, cat, sid, expiry, total)
     local a = self:EnsureAlert()
     if self._alertAG then self._alertAG:Stop() end
     if self._alertHold then self._alertHold:Cancel(); self._alertHold = nil end
@@ -528,7 +576,7 @@ function M:ShowAlert(name, icon, cat, iid, expiry, total)
     a.icon:SetTexture(icon or UNKNOWN_ICON)
     a.nameFS:SetText(name or "")
     a.catFS:SetText(cat or "")
-    self._alertIid = iid     -- so a matching removal can hide it early
+    self._shownSid = sid     -- the spell on screen; cleared when it falls off the scan
     a:SetAlpha(1)
     a:Show()
 
@@ -572,7 +620,7 @@ function M:ShowPlaceholder()
     self:CancelCountdown()
     if self._alertHold then self._alertHold:Cancel(); self._alertHold = nil end
     if self._alertAG then self._alertAG:Stop() end
-    self._alertIid = nil
+    self._shownSid = nil
     -- A representative sample so size + position read true to a real alert.
     a.icon:SetTexture(self:SpellIcon(1022) or UNKNOWN_ICON)
     a.nameFS:SetText("Externals")
@@ -608,11 +656,41 @@ end
 -- secret (unbranchable), so we can only filter when they're readable; otherwise
 -- we let the alert through (most tracked externals can't be self-cast anyway).
 function M:IsSelfCast(aura)
+    -- isSecret() FIRST, before any compare: branching on a secret value errors,
+    -- so we must never reach `== true` / UnitIsUnit on a secret field.
     local fromMe = aura.isFromPlayerOrPlayerPet
-    if fromMe ~= nil and not isSecret(fromMe) and fromMe == true then return true end
+    if not isSecret(fromMe) and fromMe == true then return true end
     local src = aura.sourceUnit
-    if src and not isSecret(src) and UnitIsUnit and UnitIsUnit(src, "player") then return true end
+    if not isSecret(src) and src and UnitIsUnit and UnitIsUnit(src, "player") then return true end
     return false
+end
+
+-- Build the set of tracked spells currently on the player: spellId -> AuraData.
+-- The 12.0-correct, secret-safe query (see header): for each KNOWN tracked id ask
+-- C_UnitAuras.GetPlayerAuraBySpellID(id). It returns the aura even when its fields
+-- are secret in combat, and -- crucially -- we never read the (secret) spellId
+-- back off it, because we already know which id we asked for. pcall per id so a
+-- stripped or pre-login environment (called before the player exists) is a
+-- harmless miss rather than an error.
+function M:ScanPresent()
+    local present = {}
+    local get = C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID
+    if not get then return present end
+    local list = self.idList or {}
+    for i = 1, #list do
+        local id = list[i]
+        local ok, aura = pcall(get, id)
+        if ok and aura then present[id] = aura end
+    end
+    return present
+end
+
+-- Snapshot the currently-present tracked buffs WITHOUT alerting, so buffs you
+-- already carry (at enable, login, zone-in, profile switch) are never mistaken
+-- for fresh casts. The next UNIT_AURA diffs against this baseline.
+function M:Baseline()
+    self._present = self:ScanPresent()
+    self._baselined = true
 end
 
 -- Work out the countdown target for a freshly-applied aura. Returns
@@ -656,26 +734,23 @@ function M:ResolveExpiry(aura, sid)
     return nil, nil
 end
 
--- Decide on a single freshly-applied aura.
-function M:Consider(aura)
-    if not aura then return end
-    local sid = aura.spellId
-    if not sid or isSecret(sid) then return end
+-- Decide on a single freshly-applied (rising-edge) aura. `sid` is the KNOWN
+-- tracked spellId we queried by; `aura` is its AuraData (fields may be secret in
+-- combat -- every read below is guarded or falls back, and we never read sid back
+-- off it because the caller already knows it).
+function M:Consider(sid, aura)
     if not (self.tracked and self.tracked[sid]) then return end
-
-    if self:IsSelfCast(aura) then return end
+    if aura and self:IsSelfCast(aura) then return end
 
     local cfg = self:Resolve(sid)
     if not (cfg.text or cfg.audio ~= "off") then return end   -- nothing to output
     if not self:Allowed(sid) then return end                  -- re-applied too soon: skip
 
     if cfg.text then
-        local icon = aura.icon
+        local icon = aura and aura.icon
         if not icon or isSecret(icon) then icon = self:SpellIcon(sid) end
-        local iid = aura.auraInstanceID
-        if isSecret(iid) then iid = nil end
-        local expiry, total = self:ResolveExpiry(aura, sid)
-        self:ShowAlert(self:SpellName(sid), icon, self:SpellCat(sid), iid, expiry, total)
+        local expiry, total = self:ResolveExpiry(aura or {}, sid)
+        self:ShowAlert(self:SpellName(sid), icon, self:SpellCat(sid), sid, expiry, total)
     end
     if cfg.audio == "tts" then
         self:Speak(self:TtsText(sid))
@@ -685,26 +760,44 @@ function M:Consider(aura)
 end
 
 function M:UNIT_AURA(unit, updateInfo)
-    if unit ~= "player" or not updateInfo then return end
+    if unit ~= "player" then return end
 
-    -- Only react to freshly ADDED auras: a full snapshot (login / zone-in) or a
-    -- refresh would re-fire alerts for buffs you already have. addedAuras carries
-    -- the full AuraData; updated/removed carry only instance IDs.
-    local added = updateInfo.addedAuras
-    if added then
-        for _, aura in ipairs(added) do self:Consider(aura) end
-    end
+    -- Re-scan which tracked buffs are on us right now (secret-safe, by known id),
+    -- then diff against the previous scan. We deliberately ignore updateInfo's
+    -- addedAuras/removed arrays -- their spellIds are secret in combat, so they
+    -- can't tell us WHICH tracked spell changed; the by-id scan can.
+    local present = self:ScanPresent()
+    local prev = self._present or {}
 
-    -- If the buff we're currently showing was removed, fade it out now.
-    local removed = updateInfo.removedAuraInstanceIDs
-    if removed and self.alert and self._alertIid then
-        for _, iid in ipairs(removed) do
-            if not isSecret(iid) and iid == self._alertIid then
-                self:HideAlert()
-                break
-            end
+    -- A full update (login / zone-in resends every aura), our first-ever scan, or
+    -- the brief post-zone settle window must only RE-BASELINE -- never alert for
+    -- buffs already held. Otherwise anything newly present is a fresh cast.
+    local now = (GetTime and GetTime()) or 0
+    local rebaseline = (updateInfo and updateInfo.isFullUpdate)
+        or not self._baselined or now < (self._zoneGuard or 0)
+
+    if not rebaseline then
+        for sid, aura in pairs(present) do
+            if not prev[sid] then self:Consider(sid, aura) end   -- rising edge = freshly applied
         end
     end
+
+    -- Falling edge: the buff we're showing is gone -> fade it out now (covers an
+    -- early dispel / cancel as well as natural expiry).
+    if self._shownSid and not present[self._shownSid] then
+        self:HideAlert()
+    end
+
+    self._present = present
+    self._baselined = true
+end
+
+-- A zone / world change resends every aura as a full update; re-baseline and
+-- suppress rising edges for a moment so buffs carried across the loading screen
+-- don't fire a flurry of alerts (mirrors EllesmereUI's post-zone grace window).
+function M:PLAYER_ENTERING_WORLD()
+    self._zoneGuard = ((GetTime and GetTime()) or 0) + 1.5
+    self:Baseline()
 end
 
 -- ===========================================================================
@@ -789,6 +882,12 @@ function M:CreateSpellRow(parent)
             pcall(GameTooltip.SetSpellByID, GameTooltip, id)
         else
             GameTooltip:SetText(M:SpellName(id))
+        end
+        -- Honest reliability note: if the client flags this aura AlwaysSecret it
+        -- can't be detected landing in combat (see M:IsReliablyTracked).
+        if not M:IsReliablyTracked(id) and GameTooltip.AddLine then
+            GameTooltip:AddLine("|c" .. UI.Hex(theme.red)
+                .. "Always hidden in combat - may not alert.|r", nil, nil, nil, true)
         end
         GameTooltip:Show()
     end)
@@ -992,6 +1091,7 @@ function M:OnProfileChanged()
     self.db.customSpells  = self.db.customSpells or {}
     self._last = {}
     self:RebuildTracked()
+    self:Baseline()        -- baseline the new profile's tracked set; no spurious alerts
     self:RefreshUnlock()   -- dismiss any live alert; re-show the placeholder if the new profile is unlocked
     if self._listChild then self:RefreshList() end
 end
@@ -1004,10 +1104,13 @@ function M:OnEnable()
             if handler then handler(self, ...) end
         end)
     end
-    -- UNIT_AURA scoped to the player only (cheap, and all we ever care about).
-    -- pcall keeps us forward-compatible if the event name ever changes.
+    -- UNIT_AURA scoped to the player only (cheap, and all we ever care about);
+    -- PLAYER_ENTERING_WORLD so we re-baseline across loading screens. pcall keeps
+    -- us forward-compatible if an event name ever changes.
     pcall(self.listener.RegisterUnitEvent, self.listener, "UNIT_AURA", "player")
+    pcall(self.listener.RegisterEvent, self.listener, "PLAYER_ENTERING_WORLD")
     self:RebuildTracked()
+    self:Baseline()        -- snapshot buffs already on us so they don't false-fire
     self:RefreshUnlock()   -- re-show the positioning placeholder if it was left unlocked
 end
 
@@ -1015,4 +1118,6 @@ function M:OnDisable()
     if self.listener then self.listener:UnregisterAllEvents() end
     self:HideAlert()
     self._last = {}
+    self._present = nil
+    self._baselined = false
 end
